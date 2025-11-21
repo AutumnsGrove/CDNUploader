@@ -5,15 +5,23 @@ batch analysis, response parsing, and cache management.
 """
 
 import base64
+import io
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import anthropic
+from PIL import Image
 
 from .config import get_cache_dir
 from .models import ImageMetadata, AIConfig
+
+# MLX model configuration
+# Default MLX model - can be overridden via environment or config
+MLX_MODEL_NAME = "mlx-community/Qwen3-VL-8B-Instruct-8bit"
+# Cache for loaded MLX model to avoid reloading
+_mlx_model_cache: dict[str, Any] = {}
 
 
 # AI Analysis Prompt
@@ -62,7 +70,7 @@ def analyze_image(
         if not config.openrouter_api_key:
             raise ValueError("OpenRouter API key not configured")
         result = _call_openrouter(image_data, config.openrouter_api_key)
-    elif provider == "local":
+    elif provider in ("local", "mlx"):
         result = _call_local(image_data)
     else:
         raise ValueError(f"Unknown provider: {provider}")
@@ -227,21 +235,86 @@ def _call_openrouter(
 
 def _call_local(
     image_data: bytes,
+    model_name: str = MLX_MODEL_NAME,
 ) -> dict[str, Any]:
-    """Make local model request for image analysis.
+    """Make MLX local model request for image analysis.
 
-    Stub implementation for future MLX/LM Studio integration.
+    Uses mlx-vlm library to run Qwen VL model locally.
 
     Args:
         image_data: Image bytes to analyze
+        model_name: MLX model name/path to use
 
     Returns:
         Parsed JSON response with description, alt_text, tags
     """
-    raise NotImplementedError(
-        "Local model integration not yet implemented. "
-        "Please use 'claude' as the provider."
+    try:
+        from mlx_vlm import load, generate
+        from mlx_vlm.prompt_utils import apply_chat_template
+        from mlx_vlm.utils import load_config
+    except ImportError:
+        raise ImportError(
+            "mlx-vlm is not installed. Install it with: pip install mlx-vlm\n"
+            "Note: MLX only works on Apple Silicon Macs."
+        )
+
+    # Load model from cache or initialize
+    if "model" not in _mlx_model_cache or _mlx_model_cache.get("model_name") != model_name:
+        _mlx_model_cache["model"], _mlx_model_cache["processor"] = load(model_name)
+        _mlx_model_cache["config"] = load_config(model_name)
+        _mlx_model_cache["model_name"] = model_name
+
+    model = _mlx_model_cache["model"]
+    processor = _mlx_model_cache["processor"]
+    config = _mlx_model_cache["config"]
+
+    # Convert bytes to PIL Image
+    image = Image.open(io.BytesIO(image_data))
+
+    # Ensure image is in RGB mode
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    # Apply chat template with the analysis prompt
+    prompt = apply_chat_template(
+        processor,
+        config,
+        ANALYSIS_PROMPT,
+        num_images=1
     )
+
+    # Generate response
+    output = generate(
+        model,
+        processor,
+        image,
+        prompt,
+        max_tokens=1024,
+        verbose=False
+    )
+
+    # Parse JSON from response
+    try:
+        # Try to find JSON in response
+        if "{" in output:
+            start = output.index("{")
+            end = output.rindex("}") + 1
+            json_str = output[start:end]
+            return json.loads(json_str)
+        else:
+            # If no JSON found, create default response
+            return {
+                "description": output[:100],
+                "alt_text": output,
+                "tags": [],
+            }
+    except (json.JSONDecodeError, ValueError):
+        # Fallback for parsing errors
+        return {
+            "description": "Image analysis completed",
+            "alt_text": output[:200] if output else "No description available",
+            "tags": [],
+        }
 
 
 def load_cache() -> dict[str, dict[str, Any]]:
