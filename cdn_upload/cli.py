@@ -74,6 +74,12 @@ def upload(
         "-n",
         help="Preview without uploading",
     ),
+    provider: str = typer.Option(
+        "claude",
+        "--provider",
+        "-p",
+        help="AI provider: claude|mlx",
+    ),
 ) -> None:
     """Upload files to CDN.
 
@@ -111,7 +117,7 @@ def upload(
                     # Handle document files
                     urls = process_document(
                         file_path, client if not dry_run else None, r2_config, ai_config,
-                        quality, full, analyze, category, output_format, dry_run, progress
+                        quality, full, analyze, category, output_format, dry_run, progress, provider
                     )
                     all_urls.extend(urls)
 
@@ -119,7 +125,7 @@ def upload(
                     # Handle media files
                     url = process_media_file(
                         file_path, client if not dry_run else None, r2_config, ai_config,
-                        quality, full, analyze, category, file_type, dry_run
+                        quality, full, analyze, category, file_type, dry_run, provider
                     )
                     if url:
                         all_urls.append(url)
@@ -174,6 +180,7 @@ def process_media_file(
     category: str,
     file_type: str,
     dry_run: bool,
+    provider: str = "claude",
 ) -> str | None:
     """Process and upload a single media file."""
     try:
@@ -196,8 +203,15 @@ def process_media_file(
 
         # Get AI analysis if requested
         metadata = None
-        if analyze and ai_config.anthropic_api_key:
-            metadata = analyze_image(webp_data, ai_config, content_hash)
+        if analyze:
+            # Check if we have required credentials for the provider
+            if provider == "claude" and not ai_config.anthropic_api_key:
+                print_warning("Anthropic API key not configured, skipping analysis")
+            elif provider == "mlx":
+                # MLX runs locally, no API key needed
+                metadata = analyze_image(webp_data, ai_config, content_hash, provider)
+            else:
+                metadata = analyze_image(webp_data, ai_config, content_hash, provider)
 
         # Build object key
         detected_category = determine_category(file_path, category)
@@ -250,6 +264,7 @@ def process_document(
     output_format: str,
     dry_run: bool,
     progress,
+    provider: str = "claude",
 ) -> list[str]:
     """Process a document file and upload its images."""
     urls = []
@@ -288,7 +303,7 @@ def process_document(
             url = process_media_file(
                 img_path, client, r2_config, ai_config,
                 quality, full, analyze, category,
-                detect_file_type(img_path), dry_run
+                detect_file_type(img_path), dry_run, provider
             )
 
             if url:

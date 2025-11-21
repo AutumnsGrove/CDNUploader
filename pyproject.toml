@@ -43,6 +43,9 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
 ]
+mlx = [
+    "mlx-vlm>=0.1.0",
+]
 
 [project.scripts]
 cdn-upload = "cdn_upload.cli:main"
