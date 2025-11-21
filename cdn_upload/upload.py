@@ -88,6 +88,70 @@ def upload_file(
     return cdn_url
 
 
+def delete_file(
+    client: Any,
+    bucket: str,
+    key: str,
+) -> bool:
+    """Delete a single file from R2.
+
+    Args:
+        client: Configured boto3 S3 client
+        bucket: R2 bucket name
+        key: Object key (path in bucket)
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    try:
+        client.delete_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError:
+        return False
+
+
+def batch_delete(
+    client: Any,
+    bucket: str,
+    keys: list[str],
+) -> tuple[int, int]:
+    """Delete multiple files from R2.
+
+    Args:
+        client: Configured boto3 S3 client
+        bucket: R2 bucket name
+        keys: List of object keys to delete
+
+    Returns:
+        Tuple of (deleted_count, failed_count)
+    """
+    if not keys:
+        return (0, 0)
+
+    # S3/R2 delete_objects can handle up to 1000 keys at once
+    deleted = 0
+    failed = 0
+
+    # Process in batches of 1000
+    for i in range(0, len(keys), 1000):
+        batch = keys[i:i+1000]
+        delete_request = {
+            'Objects': [{'Key': key} for key in batch],
+            'Quiet': True
+        }
+
+        try:
+            response = client.delete_objects(Bucket=bucket, Delete=delete_request)
+            # Count errors
+            errors = response.get('Errors', [])
+            failed += len(errors)
+            deleted += len(batch) - len(errors)
+        except ClientError:
+            failed += len(batch)
+
+    return (deleted, failed)
+
+
 def batch_upload(
     client: Any,
     bucket: str,

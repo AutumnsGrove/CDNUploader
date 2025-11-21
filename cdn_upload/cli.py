@@ -6,6 +6,8 @@ argument parsing, progress bars, and Rich console output.
 
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
+import json
 
 import typer
 from rich.console import Console
@@ -16,7 +18,7 @@ from .config import load_secrets, validate_config, get_r2_config, get_ai_config,
 from .models import ProcessingOptions, UploadResult
 from .process import process_image, process_gif, process_video, detect_file_type
 from .storage import calculate_hash, build_object_key, determine_category, get_date_path, generate_filename
-from .upload import init_r2_client, upload_file, batch_upload, verify_connection, list_recent_uploads, check_duplicate
+from .upload import init_r2_client, upload_file, batch_upload, batch_delete, verify_connection, list_recent_uploads, check_duplicate
 from .ai import analyze_image, batch_analyze
 from .parser import extract_images, categorize_reference, rewrite_document, save_new_document, detect_document_type, resolve_local_path
 from .utils import copy_to_clipboard, format_output, format_file_size, print_success, print_error, print_warning
@@ -28,6 +30,50 @@ SUPPORTED_EXTENSIONS = {
     '.mp4', '.mov', '.avi', '.webm',  # videos
     '.md', '.markdown', '.html', '.htm',  # documents
 }
+
+# History file location
+HISTORY_FILE = Path.home() / ".cdn-upload-history.json"
+
+
+def load_history() -> list[dict]:
+    """Load upload history from file."""
+    if not HISTORY_FILE.exists():
+        return []
+    try:
+        with open(HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def save_history(history: list[dict]) -> None:
+    """Save upload history to file."""
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=2, default=str)
+
+
+def add_batch_to_history(uploads: list[dict]) -> None:
+    """Add a batch of uploads to history.
+
+    Args:
+        uploads: List of dicts with 'key' and 'url' for each upload
+    """
+    if not uploads:
+        return
+
+    history = load_history()
+    batch = {
+        "timestamp": datetime.now().isoformat(),
+        "count": len(uploads),
+        "uploads": uploads
+    }
+    history.append(batch)
+
+    # Keep only last 50 batches
+    if len(history) > 50:
+        history = history[-50:]
+
+    save_history(history)
 
 
 def expand_paths(paths: list[Path]) -> list[Path]:
@@ -80,7 +126,7 @@ def upload(
         False,
         "--full",
         "-f",
-        help="Keep full resolution, no compression",
+        help="Keep full resolution (still converts to WebP)",
     ),
     skip_compression: bool = typer.Option(
         False,
@@ -147,6 +193,7 @@ def upload(
 
         results = []
         all_urls = []
+        batch_uploads = []  # Track new uploads for history
 
         with Progress(
             SpinnerColumn(),
@@ -161,6 +208,7 @@ def upload(
             for file_path in expanded_files:
                 file_type = detect_file_type(file_path)
                 progress.update(task, description=f"[cyan]Processing {file_path.name}...")
+                progress.refresh()  # Force display update
 
                 if file_type == 'document':
                     # Handle document files
@@ -173,19 +221,26 @@ def upload(
 
                 elif file_type in ('image', 'gif', 'video'):
                     # Handle media files
-                    url = process_media_file(
+                    result = process_media_file(
                         file_path, client if not dry_run else None, r2_config, ai_config,
                         quality, full, analyze, category, file_type, dry_run, provider,
                         skip_compression
                     )
-                    if url:
-                        all_urls.append(url)
-                        results.append((file_path.name, url))
+                    if result:
+                        all_urls.append(result["url"])
+                        results.append((file_path.name, result["url"]))
+                        # Track new uploads for history
+                        if result.get("new") and result.get("key"):
+                            batch_uploads.append({"key": result["key"], "url": result["url"]})
 
                 else:
                     print_warning(f"Unsupported file type: {file_path}")
 
                 progress.advance(task)
+
+        # Save batch to history (only if there were actual uploads)
+        if batch_uploads and not dry_run:
+            add_batch_to_history(batch_uploads)
 
         # Output results
         if all_urls:
@@ -233,8 +288,12 @@ def process_media_file(
     dry_run: bool,
     provider: str = "claude",
     skip_compression: bool = False,
-) -> str | None:
-    """Process and upload a single media file."""
+) -> dict | None:
+    """Process and upload a single media file.
+
+    Returns:
+        Dict with 'key' and 'url', or None if failed
+    """
     try:
         # Read original file
         with open(file_path, 'rb') as f:
@@ -285,7 +344,8 @@ def process_media_file(
 
         if dry_run:
             console.print(f"[dim]Would upload: {file_path.name} → {object_key}[/dim]")
-            return f"https://{r2_config.custom_domain}/{object_key}"
+            url = f"https://{r2_config.custom_domain}/{object_key}"
+            return {"key": object_key, "url": url, "new": False}  # dry run, don't track
 
         # Check for duplicate
         existing_url = check_duplicate(
@@ -294,7 +354,7 @@ def process_media_file(
         )
         if existing_url:
             console.print(f"[yellow]Duplicate found:[/yellow] {file_path.name}")
-            return existing_url
+            return {"key": None, "url": existing_url, "new": False}  # duplicate, don't track
 
         # Upload
         url = upload_file(
@@ -305,7 +365,7 @@ def process_media_file(
             r2_config.custom_domain
         )
 
-        return url
+        return {"key": object_key, "url": url, "new": True}  # new upload, track it
 
     except Exception as e:
         print_error(f"Failed to process {file_path.name}: {e}")
@@ -491,6 +551,131 @@ def list_cmd(
     except Exception as e:
         print_error(f"Failed to list uploads: {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def undo(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Skip confirmation prompt",
+    ),
+) -> None:
+    """Delete the most recent batch of uploads from CDN.
+
+    Removes all files from the last upload operation.
+    """
+    try:
+        # Load history
+        history = load_history()
+
+        if not history:
+            console.print("[yellow]No upload history found[/yellow]")
+            raise typer.Exit(0)
+
+        # Get the latest batch
+        latest = history[-1]
+        uploads = latest.get("uploads", [])
+        timestamp = latest.get("timestamp", "Unknown")
+
+        if not uploads:
+            console.print("[yellow]Latest batch has no uploads to delete[/yellow]")
+            raise typer.Exit(0)
+
+        # Parse and format timestamp
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            formatted_time = timestamp
+
+        # Show what will be deleted
+        console.print(f"\n[bold]Latest batch ({formatted_time}):[/bold]")
+        console.print(f"  Files: {len(uploads)}")
+        console.print("\n[dim]Files to delete:[/dim]")
+        for upload in uploads:
+            filename = Path(upload['key']).name
+            console.print(f"  • {filename}")
+
+        # Confirm deletion
+        if not force:
+            console.print("")
+            confirm = typer.confirm("Delete these files from CDN?", default=False)
+            if not confirm:
+                console.print("[yellow]Cancelled[/yellow]")
+                raise typer.Exit(0)
+
+        # Load config and initialize client
+        secrets = load_secrets()
+        validate_config(secrets)
+        r2_config = get_r2_config(secrets)
+        client = init_r2_client(r2_config)
+
+        # Delete files
+        keys = [upload['key'] for upload in uploads]
+
+        with console.status("[bold red]Deleting files..."):
+            deleted, failed = batch_delete(client, r2_config.bucket_name, keys)
+
+        # Remove batch from history
+        history.pop()
+        save_history(history)
+
+        # Report results
+        if failed == 0:
+            console.print(f"\n[green]✓ Deleted {deleted} files[/green]")
+        else:
+            console.print(f"\n[yellow]Deleted {deleted} files, {failed} failed[/yellow]")
+
+    except ConfigError as e:
+        print_error(f"Configuration error: {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Undo failed: {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def history(
+    count: int = typer.Option(
+        5,
+        "--count",
+        "-n",
+        help="Number of recent batches to show",
+    ),
+) -> None:
+    """Show recent upload batches.
+
+    Displays timestamp and file count for recent uploads.
+    """
+    batches = load_history()
+
+    if not batches:
+        console.print("[yellow]No upload history found[/yellow]")
+        return
+
+    # Show recent batches (most recent first)
+    recent = list(reversed(batches[-count:]))
+
+    table = Table(title="Recent Upload Batches")
+    table.add_column("#", style="dim")
+    table.add_column("Timestamp", style="cyan")
+    table.add_column("Files", justify="right")
+
+    for i, batch in enumerate(recent):
+        timestamp = batch.get("timestamp", "Unknown")
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            formatted = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            formatted = timestamp
+
+        file_count = str(batch.get("count", len(batch.get("uploads", []))))
+        table.add_row(str(i + 1), formatted, file_count)
+
+    console.print(table)
+    console.print(f"\n[dim]Use 'cdn-upload undo' to delete the most recent batch[/dim]")
 
 
 def main() -> None:
