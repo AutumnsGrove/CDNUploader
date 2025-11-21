@@ -50,6 +50,12 @@ def upload(
         "-f",
         help="Keep full resolution, no compression",
     ),
+    skip_compression: bool = typer.Option(
+        False,
+        "--skip-compression",
+        "-s",
+        help="Upload original file without WebP conversion",
+    ),
     analyze: bool = typer.Option(
         False,
         "--analyze",
@@ -117,7 +123,8 @@ def upload(
                     # Handle document files
                     urls = process_document(
                         file_path, client if not dry_run else None, r2_config, ai_config,
-                        quality, full, analyze, category, output_format, dry_run, progress, provider
+                        quality, full, analyze, category, output_format, dry_run, progress, provider,
+                        skip_compression
                     )
                     all_urls.extend(urls)
 
@@ -125,7 +132,8 @@ def upload(
                     # Handle media files
                     url = process_media_file(
                         file_path, client if not dry_run else None, r2_config, ai_config,
-                        quality, full, analyze, category, file_type, dry_run, provider
+                        quality, full, analyze, category, file_type, dry_run, provider,
+                        skip_compression
                     )
                     if url:
                         all_urls.append(url)
@@ -181,25 +189,33 @@ def process_media_file(
     file_type: str,
     dry_run: bool,
     provider: str = "claude",
+    skip_compression: bool = False,
 ) -> str | None:
     """Process and upload a single media file."""
     try:
-        # Read and process file
+        # Read original file
         with open(file_path, 'rb') as f:
             original_data = f.read()
 
-        # Process based on type
-        if file_type == 'image':
-            webp_data, dimensions = process_image(file_path, quality, full)
-        elif file_type == 'gif':
-            webp_data, dimensions = process_gif(file_path, quality)
-        elif file_type == 'video':
-            webp_data, dimensions = process_video(file_path, quality)
+        # Determine if we should skip compression
+        if skip_compression and file_type == 'image':
+            # Upload original file without conversion
+            upload_data = original_data
+            file_extension = file_path.suffix.lower()
         else:
-            return None
+            # Process based on type (convert to WebP)
+            if file_type == 'image':
+                upload_data, dimensions = process_image(file_path, quality, full)
+            elif file_type == 'gif':
+                upload_data, dimensions = process_gif(file_path, quality)
+            elif file_type == 'video':
+                upload_data, dimensions = process_video(file_path, quality)
+            else:
+                return None
+            file_extension = '.webp'
 
         # Calculate hash
-        content_hash = calculate_hash(webp_data)
+        content_hash = calculate_hash(upload_data)
 
         # Get AI analysis if requested
         metadata = None
@@ -209,9 +225,9 @@ def process_media_file(
                 print_warning("Anthropic API key not configured, skipping analysis")
             elif provider == "mlx":
                 # MLX runs locally, no API key needed
-                metadata = analyze_image(webp_data, ai_config, content_hash, provider)
+                metadata = analyze_image(upload_data, ai_config, content_hash, provider)
             else:
-                metadata = analyze_image(webp_data, ai_config, content_hash, provider)
+                metadata = analyze_image(upload_data, ai_config, content_hash, provider)
 
         # Build object key
         detected_category = determine_category(file_path, category)
@@ -219,7 +235,8 @@ def process_media_file(
         filename = generate_filename(
             file_path.stem,
             content_hash,
-            metadata.description if metadata else None
+            metadata.description if metadata else None,
+            file_extension
         )
         object_key = build_object_key(detected_category, date_path, filename)
 
@@ -241,7 +258,7 @@ def process_media_file(
             client,
             r2_config.bucket_name,
             object_key,
-            webp_data,
+            upload_data,
             r2_config.custom_domain
         )
 
@@ -265,6 +282,7 @@ def process_document(
     dry_run: bool,
     progress,
     provider: str = "claude",
+    skip_compression: bool = False,
 ) -> list[str]:
     """Process a document file and upload its images."""
     urls = []
@@ -303,7 +321,8 @@ def process_document(
             url = process_media_file(
                 img_path, client, r2_config, ai_config,
                 quality, full, analyze, category,
-                detect_file_type(img_path), dry_run, provider
+                detect_file_type(img_path), dry_run, provider,
+                skip_compression
             )
 
             if url:
