@@ -21,6 +21,38 @@ from .ai import analyze_image, batch_analyze
 from .parser import extract_images, categorize_reference, rewrite_document, save_new_document, detect_document_type, resolve_local_path
 from .utils import copy_to_clipboard, format_output, format_file_size, print_success, print_error, print_warning
 
+# Supported file extensions for folder expansion
+SUPPORTED_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff',  # images
+    '.gif',  # gifs
+    '.mp4', '.mov', '.avi', '.webm',  # videos
+    '.md', '.markdown', '.html', '.htm',  # documents
+}
+
+
+def expand_paths(paths: list[Path]) -> list[Path]:
+    """Expand paths, recursively finding files in directories.
+
+    Args:
+        paths: List of file or directory paths
+
+    Returns:
+        List of file paths (directories expanded to their contents)
+    """
+    expanded = []
+
+    for path in paths:
+        if path.is_dir():
+            # Recursively find all supported files in directory
+            for ext in SUPPORTED_EXTENSIONS:
+                expanded.extend(path.rglob(f"*{ext}"))
+        else:
+            expanded.append(path)
+
+    # Sort by name for consistent ordering
+    return sorted(expanded, key=lambda p: p.name.lower())
+
+
 app = typer.Typer(
     name="cdn-upload",
     help="Upload images to Cloudflare R2 CDN with automatic optimization",
@@ -33,7 +65,7 @@ console = Console()
 def upload(
     files: list[Path] = typer.Argument(
         ...,
-        help="Image files, video files, or document files (md, html) to upload",
+        help="Image files, video files, document files (md, html), or folders to upload",
         exists=True,
     ),
     quality: int = typer.Option(
@@ -98,6 +130,17 @@ def upload(
         r2_config = get_r2_config(secrets)
         ai_config = get_ai_config(secrets)
 
+        # Expand directories to individual files
+        expanded_files = expand_paths(files)
+
+        if not expanded_files:
+            console.print("[yellow]No supported files found[/yellow]")
+            raise typer.Exit(0)
+
+        # Show count if folders were expanded
+        if len(expanded_files) != len(files):
+            console.print(f"[dim]Found {len(expanded_files)} files to process[/dim]\n")
+
         # Initialize R2 client
         if not dry_run:
             client = init_r2_client(r2_config)
@@ -113,9 +156,9 @@ def upload(
             console=console,
         ) as progress:
 
-            task = progress.add_task("[cyan]Processing files...", total=len(files))
+            task = progress.add_task("[cyan]Processing files...", total=len(expanded_files))
 
-            for file_path in files:
+            for file_path in expanded_files:
                 file_type = detect_file_type(file_path)
                 progress.update(task, description=f"[cyan]Processing {file_path.name}...")
 
