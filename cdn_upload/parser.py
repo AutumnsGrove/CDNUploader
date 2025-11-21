@@ -37,9 +37,38 @@ def extract_images(content: str, doc_type: str) -> list[str]:
         doc_type: Document type ('markdown' or 'html')
 
     Returns:
-        List of image paths/URLs found
+        List of image paths/URLs found (unique, preserving order)
     """
-    raise NotImplementedError("extract_images not yet implemented")
+    images = []
+    seen = set()
+
+    if doc_type == 'markdown':
+        # Find standard Markdown images: ![alt](path)
+        for match in MARKDOWN_IMAGE_PATTERN.finditer(content):
+            path = match.group(1)
+            if path not in seen:
+                images.append(path)
+                seen.add(path)
+
+        # Also find HTML img tags embedded in Markdown
+        for match in MARKDOWN_HTML_IMG_PATTERN.finditer(content):
+            path = match.group(1)
+            if path not in seen:
+                images.append(path)
+                seen.add(path)
+
+    elif doc_type == 'html':
+        # Use BeautifulSoup for proper HTML parsing
+        soup = BeautifulSoup(content, 'lxml')
+        for img in soup.find_all('img'):
+            src = img.get('src', '')
+            if src and src not in seen:
+                # Check if it's an image file
+                if any(src.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
+                    images.append(src)
+                    seen.add(src)
+
+    return images
 
 
 def categorize_reference(ref: str, cdn_domain: str = "cdn.autumnsgrove.com") -> ReferenceType:
@@ -79,7 +108,30 @@ def rewrite_document(
     Returns:
         Document with updated image references
     """
-    raise NotImplementedError("rewrite_document not yet implemented")
+    result = content
+
+    if doc_type == 'markdown':
+        # Replace in Markdown image syntax: ![alt](old) -> ![alt](new)
+        for old_ref, new_ref in replacements.items():
+            # Escape special regex characters in old_ref
+            escaped_old = re.escape(old_ref)
+
+            # Replace in ![alt](path) format
+            pattern = rf'(!\[.*?\]\(){escaped_old}(\))'
+            result = re.sub(pattern, rf'\g<1>{new_ref}\g<2>', result)
+
+            # Also replace in HTML img tags embedded in Markdown
+            pattern = rf'(<img.*?src=["\']){escaped_old}(["\'])'
+            result = re.sub(pattern, rf'\g<1>{new_ref}\g<2>', result, flags=re.IGNORECASE)
+
+    elif doc_type == 'html':
+        # Replace in HTML img src attributes
+        for old_ref, new_ref in replacements.items():
+            escaped_old = re.escape(old_ref)
+            pattern = rf'(<img[^>]*?src=["\']){escaped_old}(["\'])'
+            result = re.sub(pattern, rf'\g<1>{new_ref}\g<2>', result, flags=re.IGNORECASE)
+
+    return result
 
 
 def save_new_document(
