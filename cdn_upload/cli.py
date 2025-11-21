@@ -37,7 +37,7 @@ def upload(
         exists=True,
     ),
     quality: int = typer.Option(
-        75,
+        85,
         "--quality",
         "-q",
         help="WebP quality 0-100",

@@ -49,6 +49,7 @@
 - [x] Write unit tests for all modules (106 tests)
 - [x] Test all output formats (plain, markdown, html)
 - [x] Test dry-run mode
+- [x] Test live upload with real R2 credentials
 - [ ] Add integration tests for full upload flow
 - [ ] Test error handling scenarios
 - [ ] Test on various image/video formats
