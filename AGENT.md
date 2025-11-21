@@ -5,17 +5,38 @@
 ---
 
 ## Project Purpose
-[Fill in: What this project does - 1-2 sentences]
+CLI tool for uploading images to Cloudflare R2 CDN with automatic WebP conversion, optional AI analysis, and intelligent file management. Supports batch processing, document parsing (Markdown/HTML), and multiple output formats.
 
 ## Tech Stack
-[Fill in: Technologies, frameworks, and languages used]
-- Language:
-- Framework:
-- Key Libraries:
-- Package Manager:
+- **Language**: Python 3.11+
+- **Framework**: Typer (CLI)
+- **Key Libraries**:
+  - `rich` - Terminal formatting and progress bars
+  - `pillow` - Image processing and WebP conversion
+  - `boto3` - S3/R2 uploads
+  - `anthropic` / `openai` - AI image analysis
+  - `ffmpeg-python` - Video to WebP conversion
+  - `pyperclip` - Clipboard operations
+  - `beautifulsoup4` - HTML/Markdown parsing
+- **Package Manager**: UV
 
 ## Architecture Notes
-[Fill in: Key architectural decisions, patterns, or structure]
+**Modular Design**: 9 specialized modules with clear separation of concerns:
+- `cli.py` - Entry point, command handling, progress display
+- `upload.py` - R2 client management, upload orchestration
+- `process.py` - Image/video processing pipeline
+- `ai.py` - AI provider abstraction (Claude, OpenRouter, local)
+- `parser.py` - Document parsing and link extraction
+- `storage.py` - Hash calculation, file naming, duplicate detection
+- `config.py` - Configuration and secrets management
+- `utils.py` - Shared utilities
+- `models.py` - Data classes and type definitions
+
+**Key Patterns**:
+- Content-addressed storage (SHA-256 hash-based deduplication)
+- Async batch processing for parallel uploads
+- AI analysis caching keyed by content hash
+- CDN URL format: `{category}/{year}/{month}/{day}/{name}_{hash}.webp`
 
 ---
 
