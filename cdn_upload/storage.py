@@ -26,6 +26,7 @@ def generate_filename(
     original_name: str,
     content_hash: str,
     description: str | None = None,
+    extension: str = ".webp",
 ) -> str:
     """Generate final filename for CDN storage.
 
@@ -36,18 +37,19 @@ def generate_filename(
         original_name: Original filename (without extension)
         content_hash: First 8 chars of content hash
         description: Optional AI-generated description
+        extension: File extension to use (default: .webp)
 
     Returns:
-        Generated filename with .webp extension
+        Generated filename with specified extension
     """
     if description:
         # Use AI description
         sanitized = sanitize_name(description, max_length=50)
-        return f"{sanitized}_{content_hash}.webp"
+        return f"{sanitized}_{content_hash}{extension}"
     else:
         # Use original name
         sanitized = sanitize_name(original_name, max_length=50)
-        return f"{content_hash}_{sanitized}.webp"
+        return f"{content_hash}_{sanitized}{extension}"
 
 
 def determine_category(file_path: Path, override: str | None = None) -> str:
