@@ -4,9 +4,11 @@ Manages R2 client initialization, single and batch uploads,
 duplicate detection, and CDN URL generation.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from .models import R2Config, UploadResult, ImageMetadata
 
@@ -52,7 +54,38 @@ def upload_file(
     Returns:
         CDN URL of uploaded file
     """
-    raise NotImplementedError("upload_file not yet implemented")
+    # Determine content type based on key extension
+    if key.endswith('.webp'):
+        content_type = 'image/webp'
+    elif key.endswith('.png'):
+        content_type = 'image/png'
+    elif key.endswith('.jpg') or key.endswith('.jpeg'):
+        content_type = 'image/jpeg'
+    elif key.endswith('.gif'):
+        content_type = 'image/gif'
+    else:
+        content_type = 'application/octet-stream'
+
+    # Prepare upload parameters
+    upload_params = {
+        'Bucket': bucket,
+        'Key': key,
+        'Body': data,
+        'ContentType': content_type,
+        'CacheControl': 'public, max-age=31536000',  # 1 year cache
+    }
+
+    # Add metadata if provided
+    if metadata:
+        upload_params['Metadata'] = metadata
+
+    # Upload to R2
+    client.put_object(**upload_params)
+
+    # Generate CDN URL
+    cdn_url = f"https://{custom_domain}/{key}"
+
+    return cdn_url
 
 
 def batch_upload(
@@ -60,6 +93,7 @@ def batch_upload(
     bucket: str,
     files: list[tuple[str, bytes, dict[str, str] | None]],
     custom_domain: str,
+    max_workers: int = 4,
 ) -> list[str]:
     """Upload multiple files in parallel.
 
@@ -68,25 +102,47 @@ def batch_upload(
         bucket: R2 bucket name
         files: List of (key, data, metadata) tuples
         custom_domain: Custom domain for CDN URLs
+        max_workers: Maximum number of parallel uploads
 
     Returns:
-        List of CDN URLs for uploaded files
+        List of CDN URLs for uploaded files (in same order as input)
     """
-    raise NotImplementedError("batch_upload not yet implemented")
+    results = [None] * len(files)
+
+    def upload_single(index: int, key: str, data: bytes, metadata: dict[str, str] | None):
+        url = upload_file(client, bucket, key, data, custom_domain, metadata)
+        return index, url
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for i, (key, data, metadata) in enumerate(files):
+            future = executor.submit(upload_single, i, key, data, metadata)
+            futures.append(future)
+
+        for future in as_completed(futures):
+            index, url = future.result()
+            results[index] = url
+
+    return results
 
 
 def check_duplicate(
     client: Any,
     bucket: str,
+    custom_domain: str,
     category: str,
     date_path: str,
     content_hash: str,
 ) -> str | None:
     """Check if a file with the same hash already exists.
 
+    Searches for files in the same category/date path that contain
+    the content hash in their filename.
+
     Args:
         client: Configured boto3 S3 client
         bucket: R2 bucket name
+        custom_domain: Custom domain for CDN URLs
         category: File category (photos, videos, etc.)
         date_path: Date path (YYYY/MM/DD)
         content_hash: First 8 chars of SHA-256 hash
@@ -94,7 +150,29 @@ def check_duplicate(
     Returns:
         Existing CDN URL if duplicate found, None otherwise
     """
-    raise NotImplementedError("check_duplicate not yet implemented")
+    # Search prefix for the date path
+    prefix = f"{category}/{date_path}/"
+
+    try:
+        # List objects in the date path
+        response = client.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix,
+            MaxKeys=1000
+        )
+
+        # Check if any object contains the hash
+        for obj in response.get('Contents', []):
+            key = obj['Key']
+            # Hash is in the filename like: name_hash.webp or hash.webp
+            if content_hash in key:
+                return f"https://{custom_domain}/{key}"
+
+        return None
+
+    except ClientError:
+        # If there's an error, assume no duplicate
+        return None
 
 
 def list_recent_uploads(
@@ -103,7 +181,7 @@ def list_recent_uploads(
     custom_domain: str,
     limit: int = 10,
     offset: int = 0,
-    category: str = "photos",
+    category: str | None = None,
 ) -> list[dict[str, Any]]:
     """List recent uploads from R2.
 
@@ -113,16 +191,66 @@ def list_recent_uploads(
         custom_domain: Custom domain for CDN URLs
         limit: Number of items per page
         offset: Number of items to skip
-        category: Category to filter by
+        category: Category to filter by (optional)
 
     Returns:
-        List of upload info dictionaries
+        List of upload info dictionaries with keys:
+        - url: CDN URL
+        - key: Object key
+        - size: Size in bytes
+        - modified: Last modified timestamp
     """
-    raise NotImplementedError("list_recent_uploads not yet implemented")
+    # Build prefix for filtering
+    prefix = f"{category}/" if category else ""
+
+    try:
+        # List all objects (R2 doesn't support offset, so we need to fetch more)
+        all_objects = []
+        continuation_token = None
+
+        while True:
+            list_params = {
+                'Bucket': bucket,
+                'MaxKeys': 1000,
+            }
+            if prefix:
+                list_params['Prefix'] = prefix
+            if continuation_token:
+                list_params['ContinuationToken'] = continuation_token
+
+            response = client.list_objects_v2(**list_params)
+
+            contents = response.get('Contents', [])
+            all_objects.extend(contents)
+
+            if not response.get('IsTruncated', False):
+                break
+            continuation_token = response.get('NextContinuationToken')
+
+        # Sort by last modified (newest first)
+        all_objects.sort(key=lambda x: x['LastModified'], reverse=True)
+
+        # Apply offset and limit
+        paginated = all_objects[offset:offset + limit]
+
+        # Format results
+        results = []
+        for obj in paginated:
+            results.append({
+                'url': f"https://{custom_domain}/{obj['Key']}",
+                'key': obj['Key'],
+                'size': obj['Size'],
+                'modified': obj['LastModified'],
+            })
+
+        return results
+
+    except ClientError as e:
+        raise RuntimeError(f"Failed to list uploads: {e}")
 
 
-def test_connection(client: Any, bucket: str) -> bool:
-    """Test R2 connection by listing bucket contents.
+def verify_connection(client: Any, bucket: str) -> bool:
+    """Verify R2 connection by checking bucket access.
 
     Args:
         client: Configured boto3 S3 client
@@ -132,6 +260,17 @@ def test_connection(client: Any, bucket: str) -> bool:
         True if connection successful
 
     Raises:
-        Exception: If connection fails
+        RuntimeError: If connection fails
     """
-    raise NotImplementedError("test_connection not yet implemented")
+    try:
+        # Try to head the bucket (check if it exists and we have access)
+        client.head_bucket(Bucket=bucket)
+        return True
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        if error_code == '404':
+            raise RuntimeError(f"Bucket '{bucket}' not found")
+        elif error_code == '403':
+            raise RuntimeError(f"Access denied to bucket '{bucket}'. Check your credentials.")
+        else:
+            raise RuntimeError(f"Failed to connect to R2: {e}")
