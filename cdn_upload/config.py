@@ -17,11 +17,27 @@ class ConfigError(Exception):
     pass
 
 
+def get_config_dir() -> Path:
+    """Get or create the config directory.
+
+    Returns:
+        Path to config directory (~/.config/cdn-upload/)
+    """
+    config_dir = Path.home() / ".config" / "cdn-upload"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
 def load_secrets(secrets_path: Path | None = None) -> dict[str, Any]:
     """Load and validate secrets.json.
 
+    Searches for secrets.json in the following order:
+    1. Explicit path if provided
+    2. ~/.config/cdn-upload/secrets.json (recommended)
+    3. ./secrets.json (current directory)
+
     Args:
-        secrets_path: Optional path to secrets.json. Defaults to ./secrets.json
+        secrets_path: Optional explicit path to secrets.json
 
     Returns:
         Dictionary containing all secrets
@@ -29,20 +45,34 @@ def load_secrets(secrets_path: Path | None = None) -> dict[str, Any]:
     Raises:
         ConfigError: If secrets.json is missing or invalid
     """
-    if secrets_path is None:
-        secrets_path = Path("secrets.json")
+    if secrets_path is not None:
+        # Explicit path provided
+        if not secrets_path.exists():
+            raise ConfigError(
+                f"secrets.json not found at {secrets_path}. "
+                "Copy from secrets.json.template and fill in your credentials."
+            )
+        found_path = secrets_path
+    else:
+        # Search in standard locations
+        config_path = get_config_dir() / "secrets.json"
+        local_path = Path("secrets.json")
 
-    if not secrets_path.exists():
-        raise ConfigError(
-            f"secrets.json not found at {secrets_path}. "
-            "Copy from secrets.json.template and fill in your credentials."
-        )
+        if config_path.exists():
+            found_path = config_path
+        elif local_path.exists():
+            found_path = local_path
+        else:
+            raise ConfigError(
+                f"secrets.json not found at {config_path}. "
+                "Copy from secrets.json.template and fill in your credentials."
+            )
 
     try:
-        with open(secrets_path) as f:
+        with open(found_path) as f:
             secrets = json.load(f)
     except json.JSONDecodeError as e:
-        raise ConfigError(f"Invalid JSON in secrets.json: {e}")
+        raise ConfigError(f"Invalid JSON in {found_path}: {e}")
 
     return secrets
 
