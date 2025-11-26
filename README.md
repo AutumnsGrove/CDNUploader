@@ -83,7 +83,7 @@ wrangler whoami
 
 ### Optional: AI Analysis
 
-For AI-powered image descriptions, add your [Anthropic API key](https://console.anthropic.com/settings/keys):
+For AI-powered image descriptions, add your [Claude API key](https://console.claude.ai/settings/keys):
 ```json
 "ai": {
   "anthropic_api_key": "sk-ant-..."
