@@ -71,7 +71,7 @@ def extract_images(content: str, doc_type: str) -> list[str]:
     return images
 
 
-def categorize_reference(ref: str, cdn_domain: str = "cdn.autumnsgrove.com") -> ReferenceType:
+def categorize_reference(ref: str, cdn_domain: str = "cdn.example.com") -> ReferenceType:
     """Determine if a reference is local, external, or already on CDN.
 
     Args:

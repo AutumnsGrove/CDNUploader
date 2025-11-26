@@ -120,7 +120,7 @@ class TestCategorizeReference:
 
     def test_identifies_cdn_urls(self):
         """Should return 'cdn' for CDN domain URLs."""
-        ref = "https://cdn.autumnsgrove.com/photos/test.webp"
+        ref = "https://cdn.example.com/photos/test.webp"
         assert categorize_reference(ref) == "cdn"
 
     def test_identifies_external_urls(self):
