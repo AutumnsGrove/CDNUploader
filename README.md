@@ -47,21 +47,48 @@ uv pip install -e ".[dev]"
 
 ## Configuration
 
-Copy the template and add your credentials:
+### Quick Setup (Recommended)
+
+If you have [Wrangler](https://developers.cloudflare.com/workers/wrangler/) installed and logged in:
 
 ```bash
-cp secrets.json.template secrets.json
+cdn-upload setup
 ```
 
-Edit `secrets.json` with your Cloudflare R2 credentials:
-- Account ID
-- Access Key ID
-- Secret Access Key
-- Bucket Name
-- Custom Domain
+This will detect your Cloudflare account, list your R2 buckets, and help create `secrets.json`.
 
-Optional AI provider key:
-- Anthropic API Key (for Claude vision analysis)
+### Manual Setup
+
+1. Copy the template:
+   ```bash
+   cp secrets.json.template ~/.config/cdn-upload/secrets.json
+   ```
+
+2. Fill in your credentials (see below for where to find each one)
+
+### Where to Find Your Credentials
+
+| Field | Where to Find It |
+|-------|------------------|
+| **account_id** | [Cloudflare Dashboard](https://dash.cloudflare.com) → Any domain → **Overview** → right sidebar under "API" → **Account ID** |
+| **access_key_id** | [R2 Overview](https://dash.cloudflare.com/?to=/:account/r2/api-tokens) → **Manage R2 API Tokens** → Create token → Copy **Access Key ID** |
+| **secret_access_key** | Same as above → Copy **Secret Access Key** (shown only once!) |
+| **bucket_name** | [R2 Overview](https://dash.cloudflare.com/?to=/:account/r2/overview) → Your bucket's name |
+| **custom_domain** | [R2 Bucket](https://dash.cloudflare.com/?to=/:account/r2/overview) → Click bucket → **Settings** → **Public access** → Custom domain |
+
+**Tip**: If you have Wrangler installed, you can also find your account ID with:
+```bash
+wrangler whoami
+```
+
+### Optional: AI Analysis
+
+For AI-powered image descriptions, add your [Anthropic API key](https://console.anthropic.com/settings/keys):
+```json
+"ai": {
+  "anthropic_api_key": "sk-ant-..."
+}
+```
 
 ## Quick Start
 
