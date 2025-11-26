@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 import json
+import subprocess
+import shutil
 
 import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 
-from .config import load_secrets, validate_config, get_r2_config, get_ai_config, ConfigError
+from .config import load_secrets, validate_config, get_r2_config, get_ai_config, ConfigError, get_config_dir
 from .models import ProcessingOptions, UploadResult
 from .process import process_image, process_gif, process_video, detect_file_type
 from .storage import calculate_hash, build_object_key, determine_category, get_date_path, generate_filename
@@ -676,6 +678,161 @@ def history(
 
     console.print(table)
     console.print(f"\n[dim]Use 'cdn-upload undo' to delete the most recent batch[/dim]")
+
+
+@app.command()
+def setup() -> None:
+    """Interactive setup wizard for secrets.json.
+
+    Detects Wrangler config to pre-fill account ID and bucket names.
+    """
+    console.print("\n[bold]CDN Upload Setup Wizard[/bold]\n")
+
+    secrets_path = get_config_dir() / "secrets.json"
+    template = {
+        "r2": {
+            "account_id": "",
+            "access_key_id": "",
+            "secret_access_key": "",
+            "bucket_name": "",
+            "custom_domain": ""
+        },
+        "ai": {
+            "anthropic_api_key": "",
+            "openrouter_api_key": None
+        }
+    }
+
+    # Check if secrets already exist
+    if secrets_path.exists():
+        console.print(f"[yellow]Found existing config at:[/yellow] {secrets_path}")
+        if not typer.confirm("Overwrite with new setup?", default=False):
+            console.print("[dim]Setup cancelled[/dim]")
+            raise typer.Exit(0)
+
+    # Check for Wrangler
+    wrangler_path = shutil.which("wrangler")
+    account_id = None
+    buckets = []
+
+    if wrangler_path:
+        console.print("[green]✓[/green] Wrangler detected\n")
+
+        # Try to get account info
+        with console.status("[dim]Fetching account info...[/dim]"):
+            try:
+                result = subprocess.run(
+                    ["wrangler", "whoami"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15
+                )
+                if result.returncode == 0:
+                    # Parse account ID from output
+                    for line in result.stdout.split('\n'):
+                        if 'Account ID' in line or 'account_id' in line.lower():
+                            # Extract ID (usually in format "Account ID: abc123" or similar)
+                            parts = line.split(':')
+                            if len(parts) >= 2:
+                                account_id = parts[-1].strip()
+                        # Also check for format like "│ abc123 │ Account Name │"
+                        if '│' in line and len(line.split('│')) >= 3:
+                            parts = [p.strip() for p in line.split('│') if p.strip()]
+                            if len(parts) >= 1 and len(parts[0]) == 32:
+                                account_id = parts[0]
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+
+        if account_id:
+            console.print(f"[green]✓[/green] Found Account ID: [cyan]{account_id}[/cyan]")
+            template["r2"]["account_id"] = account_id
+
+        # Try to list R2 buckets
+        with console.status("[dim]Listing R2 buckets...[/dim]"):
+            try:
+                result = subprocess.run(
+                    ["wrangler", "r2", "bucket", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15
+                )
+                if result.returncode == 0:
+                    # Parse bucket names from output
+                    for line in result.stdout.split('\n'):
+                        line = line.strip()
+                        # Skip empty lines and headers
+                        if not line or line.startswith('name') or line.startswith('-'):
+                            continue
+                        # Bucket names are usually the first column
+                        if '│' in line:
+                            parts = [p.strip() for p in line.split('│') if p.strip()]
+                            if parts:
+                                buckets.append(parts[0])
+                        elif line and not line.startswith('[') and not line.startswith('Using'):
+                            # Simple format: just bucket name per line
+                            buckets.append(line.split()[0] if line.split() else line)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+
+        if buckets:
+            console.print(f"[green]✓[/green] Found {len(buckets)} R2 bucket(s):\n")
+            for i, bucket in enumerate(buckets, 1):
+                console.print(f"  {i}. {bucket}")
+
+            console.print("")
+            if len(buckets) == 1:
+                template["r2"]["bucket_name"] = buckets[0]
+                console.print(f"[dim]Auto-selected:[/dim] {buckets[0]}")
+            else:
+                choice = typer.prompt(
+                    "Select bucket number (or enter name manually)",
+                    default="1"
+                )
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(buckets):
+                        template["r2"]["bucket_name"] = buckets[idx]
+                    else:
+                        template["r2"]["bucket_name"] = choice
+                except ValueError:
+                    template["r2"]["bucket_name"] = choice
+    else:
+        console.print("[yellow]![/yellow] Wrangler not found - manual setup required\n")
+        console.print("[dim]Install Wrangler for easier setup: npm install -g wrangler[/dim]\n")
+
+    # Show what's still needed
+    console.print("\n[bold]Credentials still needed:[/bold]\n")
+
+    missing = []
+    if not template["r2"]["account_id"]:
+        missing.append(("account_id", "Dashboard → Overview → API section"))
+    if not template["r2"]["access_key_id"]:
+        missing.append(("access_key_id", "R2 → Manage API Tokens → Create"))
+    if not template["r2"]["secret_access_key"]:
+        missing.append(("secret_access_key", "Same as above (shown only once!)"))
+    if not template["r2"]["bucket_name"]:
+        missing.append(("bucket_name", "R2 → Your bucket name"))
+    missing.append(("custom_domain", "R2 → Bucket → Settings → Custom domain"))
+
+    for field, hint in missing:
+        console.print(f"  • [cyan]{field}[/cyan]: {hint}")
+
+    console.print("\n[dim]Quick links:[/dim]")
+    console.print("  • R2 API Tokens: https://dash.cloudflare.com/?to=/:account/r2/api-tokens")
+    console.print("  • R2 Buckets: https://dash.cloudflare.com/?to=/:account/r2/overview")
+
+    # Save template
+    console.print(f"\n[bold]Saving config to:[/bold] {secrets_path}\n")
+
+    get_config_dir()  # Ensure directory exists
+    with open(secrets_path, 'w') as f:
+        json.dump(template, f, indent=2)
+
+    console.print("[green]✓[/green] Config file created!")
+    console.print(f"\n[dim]Edit the file to add your credentials:[/dim]")
+    console.print(f"  nano {secrets_path}")
+    console.print(f"\n[dim]Then verify with:[/dim]")
+    console.print("  cdn-upload auth")
 
 
 def main() -> None:
