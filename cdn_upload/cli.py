@@ -36,6 +36,9 @@ SUPPORTED_EXTENSIONS = {
 # History file location
 HISTORY_FILE = Path.home() / ".cdn-upload-history.json"
 
+# Preview directory for --preview mode
+PREVIEW_DIR = Path.home() / "Downloads" / "cdn-upload-preview"
+
 
 def load_history() -> list[dict]:
     """Load upload history from file."""
@@ -76,6 +79,27 @@ def add_batch_to_history(uploads: list[dict]) -> None:
         history = history[-50:]
 
     save_history(history)
+
+
+def save_preview(data: bytes, filename: str) -> Path:
+    """Save processed image to preview directory.
+
+    Args:
+        data: Processed image bytes
+        filename: Original filename
+
+    Returns:
+        Path to saved preview file
+    """
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Add timestamp to avoid overwrites
+    timestamp = datetime.now().strftime("%H%M%S")
+    stem = Path(filename).stem
+    preview_path = PREVIEW_DIR / f"{stem}_{timestamp}.webp"
+
+    preview_path.write_bytes(data)
+    return preview_path
 
 
 def expand_paths(paths: list[Path]) -> list[Path]:
@@ -172,6 +196,55 @@ def upload(
         "-p",
         help="AI provider: openrouter (default)|cloudflare|claude|mlx",
     ),
+    filter_method: str = typer.Option(
+        None,
+        "--filter",
+        "-F",
+        help=(
+            "Apply 1-bit dithering filter:\n"
+            "  atkinson        - Classic Mac, high contrast\n"
+            "  floyd-steinberg - Smooth gradients, detailed\n"
+            "  bayer           - Ordered pattern, retro look\n"
+            "  threshold       - Simple cutoff (use -t to adjust)"
+        ),
+    ),
+    preset: str = typer.Option(
+        "mac",
+        "--preset",
+        "-P",
+        help=(
+            "Color preset for dithering:\n"
+            "  cyberspace - Dark screen (#0a0a0a / #d4c5a9)\n"
+            "  mac        - Classic Mac (#000000 / #ffffff)\n"
+            "  gameboy    - Gameboy green (#0f380f / #9bbc0f)\n"
+            "  amber      - Amber CRT (#1a0a00 / #ffb000)\n"
+            "  green      - Green CRT (#001a00 / #00ff00)\n"
+            "  blueprint  - Blueprint (#001133 / #99ccff)"
+        ),
+    ),
+    dark_color: str = typer.Option(
+        None,
+        "--dark",
+        help="Custom dark color hex (e.g., #0a0a0a)",
+    ),
+    light_color: str = typer.Option(
+        None,
+        "--light",
+        help="Custom light color hex (e.g., #d4c5a9)",
+    ),
+    threshold_level: int = typer.Option(
+        128,
+        "--threshold-level",
+        "-t",
+        help="Threshold level for threshold filter (0-255)",
+        min=0,
+        max=255,
+    ),
+    preview: bool = typer.Option(
+        False,
+        "--preview",
+        help="Save processed image locally without uploading",
+    ),
 ) -> None:
     """Upload files to CDN.
 
@@ -208,8 +281,8 @@ def upload(
         if len(expanded_files) != len(files):
             console.print(f"[dim]Found {len(expanded_files)} files to process[/dim]\n")
 
-        # Initialize R2 client
-        if not dry_run:
+        # Initialize R2 client (skip for dry_run or preview mode)
+        if not dry_run and not preview:
             client = init_r2_client(r2_config)
 
         results = []
@@ -243,15 +316,16 @@ def upload(
                 elif file_type in ('image', 'gif', 'video'):
                     # Handle media files
                     result = process_media_file(
-                        file_path, client if not dry_run else None, r2_config, ai_config,
+                        file_path, client if not dry_run and not preview else None, r2_config, ai_config,
                         quality, full, analyze, category, file_type, dry_run, provider,
-                        skip_compression, image_format
+                        skip_compression, image_format, filter_method, preset, dark_color, light_color,
+                        threshold_level, preview
                     )
                     if result:
                         all_urls.append(result["url"])
                         results.append((file_path.name, result["url"]))
-                        # Track new uploads for history
-                        if result.get("new") and result.get("key"):
+                        # Track new uploads for history (not for preview mode)
+                        if result.get("new") and result.get("key") and not preview:
                             batch_uploads.append({"key": result["key"], "url": result["url"]})
 
                 else:
@@ -259,14 +333,16 @@ def upload(
 
                 progress.advance(task)
 
-        # Save batch to history (only if there were actual uploads)
-        if batch_uploads and not dry_run:
+        # Save batch to history (only if there were actual uploads, not preview/dry_run)
+        if batch_uploads and not dry_run and not preview:
             add_batch_to_history(batch_uploads)
 
         # Output results
         if all_urls:
-            # Format output based on type
-            if output_format == 'plain':
+            # Format output based on type (preview mode uses plain paths)
+            if preview:
+                output = '\n'.join(all_urls)
+            elif output_format == 'plain':
                 output = '\n'.join(all_urls)
             elif output_format == 'markdown':
                 output = '\n'.join(f"![]({url})" for url in all_urls)
@@ -275,18 +351,30 @@ def upload(
             else:
                 output = '\n'.join(all_urls)
 
-            console.print("\n[bold green]Upload complete![/bold green]\n")
+            if preview:
+                console.print("\n[bold green]Preview complete![/bold green]\n")
+            else:
+                console.print("\n[bold green]Upload complete![/bold green]\n")
             console.print(output)
 
             # Copy to clipboard
             if len(all_urls) == 1:
                 copy_to_clipboard(all_urls[0])
-                console.print("\n[dim]URL copied to clipboard[/dim]")
+                if preview:
+                    console.print("\n[dim]Path copied to clipboard[/dim]")
+                else:
+                    console.print("\n[dim]URL copied to clipboard[/dim]")
             else:
                 copy_to_clipboard(output)
-                console.print(f"\n[dim]{len(all_urls)} URLs copied to clipboard[/dim]")
+                if preview:
+                    console.print(f"\n[dim]{len(all_urls)} paths copied to clipboard[/dim]")
+                else:
+                    console.print(f"\n[dim]{len(all_urls)} URLs copied to clipboard[/dim]")
         else:
-            console.print("[yellow]No files were uploaded[/yellow]")
+            if preview:
+                console.print("[yellow]No files were processed[/yellow]")
+            else:
+                console.print("[yellow]No files were uploaded[/yellow]")
 
     except ConfigError as e:
         print_error(f"Configuration error: {e}")
@@ -310,6 +398,12 @@ def process_media_file(
     provider: str = "openrouter",
     skip_compression: bool = False,
     image_format: str = "jxl",
+    filter_method: str | None = None,
+    filter_preset: str = "mac",
+    dark_color: str | None = None,
+    light_color: str | None = None,
+    threshold_level: int = 128,
+    preview: bool = False,
 ) -> dict | None:
     """Process and upload a single media file.
 
@@ -344,7 +438,10 @@ def process_media_file(
             # Process based on type
             if file_type == 'image':
                 upload_data, dimensions = process_image(
-                    file_path, quality, full, output_format=output_fmt
+                    file_path, quality, full, output_format=output_fmt,
+                    filter_method=filter_method, filter_preset=filter_preset,
+                    dark_color=dark_color, light_color=light_color,
+                    threshold_level=threshold_level
                 )
             elif file_type == 'gif':
                 upload_data, dimensions = process_gif(
@@ -394,6 +491,12 @@ def process_media_file(
             console.print(f"[dim]Would upload: {file_path.name} → {object_key}[/dim]")
             url = f"https://{r2_config.custom_domain}/{object_key}"
             return {"key": object_key, "url": url, "new": False}  # dry run, don't track
+
+        # Preview mode: save locally without uploading
+        if preview:
+            preview_path = save_preview(upload_data, file_path.name)
+            console.print(f"[green]Preview saved:[/green] {preview_path}")
+            return {"key": None, "url": str(preview_path), "new": False}  # preview, don't track
 
         # Check for duplicate
         existing_url = check_duplicate(

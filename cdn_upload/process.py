@@ -31,6 +31,11 @@ def process_image(
     full_resolution: bool = False,
     output_format: OutputFormat = "jxl",
     lossless_jpeg: bool = True,
+    filter_method: str | None = None,
+    filter_preset: str = 'mac',
+    dark_color: str | None = None,
+    light_color: str | None = None,
+    threshold_level: int = 128,
 ) -> tuple[bytes, tuple[int, int]]:
     """Convert image to optimized JPEG XL or WebP format.
 
@@ -40,6 +45,11 @@ def process_image(
         full_resolution: If True, skip resizing
         output_format: Output format - 'jxl' (default) or 'webp'
         lossless_jpeg: If True and input is JPEG, use lossless JXL transcoding
+        filter_method: Dithering filter (atkinson|floyd-steinberg|bayer|threshold)
+        filter_preset: Color preset name
+        dark_color: Custom dark color hex
+        light_color: Custom light color hex
+        threshold_level: For threshold filter (0-255)
 
     Returns:
         Tuple of (output bytes, (width, height))
@@ -103,6 +113,13 @@ def process_image(
 
     # Strip location EXIF data
     image = strip_location_exif(image)
+
+    # Apply dithering filter if specified
+    if filter_method:
+        image = apply_filter(
+            image, filter_method, filter_preset,
+            dark_color, light_color, threshold_level
+        )
 
     # Calculate target dimensions
     if full_resolution:
@@ -367,6 +384,182 @@ def strip_location_exif(image: Image.Image) -> Image.Image:
     # Create a new image with cleaned EXIF
     # The cleanest way is to copy without GPS
     return image
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DITHERING ALGORITHMS
+# ═══════════════════════════════════════════════════════════════════════════
+
+DITHER_PRESETS = {
+    'cyberspace': {'dark': '#0a0a0a', 'light': '#d4c5a9'},
+    'mac': {'dark': '#000000', 'light': '#ffffff'},
+    'gameboy': {'dark': '#0f380f', 'light': '#9bbc0f'},
+    'amber': {'dark': '#1a0a00', 'light': '#ffb000'},
+    'green': {'dark': '#001a00', 'light': '#00ff00'},
+    'blueprint': {'dark': '#001133', 'light': '#99ccff'},
+}
+
+
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert hex color to RGB tuple."""
+    hex_color = hex_color.lstrip('#')
+    return (
+        int(hex_color[0:2], 16),
+        int(hex_color[2:4], 16),
+        int(hex_color[4:6], 16),
+    )
+
+
+def apply_filter(
+    image: Image.Image,
+    method: str,
+    preset: str = 'mac',
+    dark: str | None = None,
+    light: str | None = None,
+    threshold_level: int = 128,
+) -> Image.Image:
+    """Apply dithering filter with color mapping.
+
+    Args:
+        image: PIL Image (should be RGB)
+        method: atkinson|floyd-steinberg|bayer|threshold
+        preset: Color preset name
+        dark: Custom dark color (hex)
+        light: Custom light color (hex)
+        threshold_level: For threshold method (0-255)
+
+    Returns:
+        Filtered PIL Image
+    """
+    import numpy as np
+
+    # Get colors from preset or custom
+    colors = DITHER_PRESETS.get(preset, DITHER_PRESETS['mac'])
+    dark_color = dark or colors['dark']
+    light_color = light or colors['light']
+
+    # Apply dithering
+    if method == 'atkinson':
+        dithered = dither_atkinson(image)
+    elif method == 'floyd-steinberg':
+        dithered = dither_floyd_steinberg(image)
+    elif method == 'bayer':
+        dithered = dither_bayer(image)
+    elif method == 'threshold':
+        dithered = dither_threshold(image, threshold_level)
+    else:
+        raise ValueError(f"Unknown dither method: {method}")
+
+    # Apply color mapping
+    return apply_color_map(dithered, dark_color, light_color)
+
+
+def dither_atkinson(image: Image.Image) -> Image.Image:
+    """Atkinson dithering - classic Mac algorithm.
+
+    Spreads 6/8 of error to 6 neighbors (loses 2/8 = sharper contrast).
+    """
+    import numpy as np
+
+    gray = np.array(image.convert('L'), dtype=np.float32)
+    height, width = gray.shape
+
+    for y in range(height):
+        for x in range(width):
+            old_val = gray[y, x]
+            new_val = 255.0 if old_val >= 128 else 0.0
+            gray[y, x] = new_val
+            error = (old_val - new_val) / 8.0
+
+            # Atkinson pattern: distribute to 6 neighbors
+            neighbors = [
+                (x + 1, y), (x + 2, y),
+                (x - 1, y + 1), (x, y + 1), (x + 1, y + 1),
+                (x, y + 2)
+            ]
+            for nx, ny in neighbors:
+                if 0 <= nx < width and 0 <= ny < height:
+                    gray[ny, nx] = np.clip(gray[ny, nx] + error, 0, 255)
+
+    return Image.fromarray(gray.astype(np.uint8), mode='L')
+
+
+def dither_floyd_steinberg(image: Image.Image) -> Image.Image:
+    """Floyd-Steinberg error diffusion dithering."""
+    import numpy as np
+
+    gray = np.array(image.convert('L'), dtype=np.float32)
+    height, width = gray.shape
+
+    for y in range(height):
+        for x in range(width):
+            old_val = gray[y, x]
+            new_val = 255.0 if old_val >= 128 else 0.0
+            gray[y, x] = new_val
+            error = old_val - new_val
+
+            # Floyd-Steinberg distribution
+            if x + 1 < width:
+                gray[y, x + 1] += error * 7 / 16
+            if y + 1 < height:
+                if x > 0:
+                    gray[y + 1, x - 1] += error * 3 / 16
+                gray[y + 1, x] += error * 5 / 16
+                if x + 1 < width:
+                    gray[y + 1, x + 1] += error * 1 / 16
+
+    gray = np.clip(gray, 0, 255)
+    return Image.fromarray(gray.astype(np.uint8), mode='L')
+
+
+def dither_bayer(image: Image.Image) -> Image.Image:
+    """Bayer ordered dithering with 4x4 matrix."""
+    import numpy as np
+
+    gray = np.array(image.convert('L'), dtype=np.float32)
+    height, width = gray.shape
+
+    # 4x4 Bayer matrix
+    bayer = np.array([
+        [0, 8, 2, 10],
+        [12, 4, 14, 6],
+        [3, 11, 1, 9],
+        [15, 7, 13, 5]
+    ], dtype=np.float32)
+
+    # Normalize to 0-255 range
+    threshold_map = np.tile(bayer, (height // 4 + 1, width // 4 + 1))[:height, :width]
+    threshold_map = (threshold_map + 1) / 17.0 * 255
+
+    result = np.where(gray > threshold_map, 255, 0).astype(np.uint8)
+    return Image.fromarray(result, mode='L')
+
+
+def dither_threshold(image: Image.Image, level: int = 128) -> Image.Image:
+    """Simple threshold dithering."""
+    import numpy as np
+
+    gray = np.array(image.convert('L'))
+    result = np.where(gray >= level, 255, 0).astype(np.uint8)
+    return Image.fromarray(result, mode='L')
+
+
+def apply_color_map(image: Image.Image, dark: str, light: str) -> Image.Image:
+    """Map grayscale (0=dark, 255=light) to custom colors."""
+    import numpy as np
+
+    gray = np.array(image.convert('L'))
+    dark_rgb = hex_to_rgb(dark)
+    light_rgb = hex_to_rgb(light)
+
+    # Create RGB output
+    rgb = np.zeros((*gray.shape, 3), dtype=np.uint8)
+    mask = gray > 128
+
+    for i in range(3):
+        rgb[:, :, i] = np.where(mask, light_rgb[i], dark_rgb[i])
+
+    return Image.fromarray(rgb, mode='RGB')
 
 
 def calculate_dimensions(
