@@ -1,6 +1,6 @@
 """Tests for process.py module.
 
-Tests image processing, WebP conversion, EXIF stripping,
+Tests image processing, JPEG XL/WebP conversion, EXIF stripping,
 GIF handling, and video conversion.
 """
 
@@ -19,6 +19,7 @@ from cdn_upload.process import (
     calculate_dimensions,
     get_video_duration,
     detect_file_type,
+    JXL_AVAILABLE,
 )
 
 
@@ -29,6 +30,16 @@ def sample_image_path(tmp_path):
     # Create a simple RGB image
     img = Image.new('RGB', (800, 600), color=(255, 0, 0))
     img.save(img_path, 'PNG')
+    return img_path
+
+
+@pytest.fixture
+def sample_jpeg_path(tmp_path):
+    """Create sample JPEG image for testing lossless transcoding."""
+    img_path = tmp_path / "test.jpg"
+    # Create a simple RGB image
+    img = Image.new('RGB', (800, 600), color=(255, 0, 0))
+    img.save(img_path, 'JPEG', quality=95)
     return img_path
 
 
@@ -85,9 +96,20 @@ def static_gif_path(tmp_path):
 class TestProcessImage:
     """Tests for process_image function."""
 
-    def test_converts_to_webp(self, sample_image_path):
-        """Should convert image to WebP format."""
+    @pytest.mark.skipif(not JXL_AVAILABLE, reason="pillow-jxl-plugin not installed")
+    def test_converts_to_jxl_default(self, sample_image_path):
+        """Should convert image to JXL format by default."""
         result_bytes, dimensions = process_image(sample_image_path)
+
+        # JXL files start with signature 0xFF0A (bare codestream) or box-based format
+        # The pillow-jxl-plugin typically outputs box-based format starting with 0x0000000C
+        assert len(result_bytes) > 0
+        # JXL can start with different signatures depending on format
+        assert result_bytes[:2] == b'\xff\n' or result_bytes[:4] == b'\x00\x00\x00\x0c'
+
+    def test_converts_to_webp_fallback(self, sample_image_path):
+        """Should convert image to WebP when specified."""
+        result_bytes, dimensions = process_image(sample_image_path, output_format="webp")
 
         # Verify it's valid WebP
         assert result_bytes[:4] == b'RIFF'
@@ -95,29 +117,29 @@ class TestProcessImage:
 
     def test_respects_quality_setting(self, sample_image_path):
         """Higher quality should produce larger file."""
-        low_quality, _ = process_image(sample_image_path, quality=20)
-        high_quality, _ = process_image(sample_image_path, quality=95)
+        low_quality, _ = process_image(sample_image_path, quality=20, output_format="webp")
+        high_quality, _ = process_image(sample_image_path, quality=95, output_format="webp")
 
         # Higher quality should generally be larger
         assert len(high_quality) > len(low_quality)
 
     def test_preserves_full_resolution(self, large_image_path):
         """Should not resize when full_resolution is True."""
-        _, dimensions = process_image(large_image_path, full_resolution=True)
+        _, dimensions = process_image(large_image_path, full_resolution=True, output_format="webp")
 
         # Should keep original dimensions
         assert dimensions == (4000, 3000)
 
     def test_resizes_large_images(self, large_image_path):
         """Should resize large images based on quality."""
-        _, dimensions = process_image(large_image_path, quality=75)
+        _, dimensions = process_image(large_image_path, quality=75, output_format="webp")
 
         # Should be resized to max 2048 (for quality >= 75)
         assert max(dimensions) <= 2048
 
     def test_returns_correct_dimensions(self, sample_image_path):
         """Should return actual output dimensions."""
-        _, dimensions = process_image(sample_image_path)
+        _, dimensions = process_image(sample_image_path, output_format="webp")
 
         assert isinstance(dimensions, tuple)
         assert len(dimensions) == 2
@@ -125,7 +147,7 @@ class TestProcessImage:
 
     def test_handles_rgba_images(self, sample_rgba_image_path):
         """Should convert RGBA to RGB with white background."""
-        result_bytes, dimensions = process_image(sample_rgba_image_path)
+        result_bytes, dimensions = process_image(sample_rgba_image_path, output_format="webp")
 
         # Should produce valid WebP
         assert result_bytes[:4] == b'RIFF'
@@ -137,9 +159,32 @@ class TestProcessImage:
             data = f.read()
 
         buffer = BytesIO(data)
-        result_bytes, dimensions = process_image(buffer)
+        result_bytes, dimensions = process_image(buffer, output_format="webp")
 
         assert result_bytes[:4] == b'RIFF'
+
+    @pytest.mark.skipif(not JXL_AVAILABLE, reason="pillow-jxl-plugin not installed")
+    def test_lossless_jpeg_transcoding(self, sample_jpeg_path):
+        """Should use lossless transcoding for JPEG inputs with full resolution."""
+        result_bytes, dimensions = process_image(
+            sample_jpeg_path,
+            output_format="jxl",
+            full_resolution=True,
+            lossless_jpeg=True
+        )
+
+        # Should produce JXL output
+        assert len(result_bytes) > 0
+        assert result_bytes[:2] == b'\xff\n' or result_bytes[:4] == b'\x00\x00\x00\x0c'
+        assert dimensions == (800, 600)
+
+    def test_raises_when_jxl_unavailable(self, sample_image_path):
+        """Should raise RuntimeError when JXL requested but unavailable."""
+        if JXL_AVAILABLE:
+            pytest.skip("JXL is available, can't test unavailable path")
+
+        with pytest.raises(RuntimeError, match="JPEG XL support not available"):
+            process_image(sample_image_path, output_format="jxl")
 
 
 class TestProcessGif:
@@ -147,14 +192,14 @@ class TestProcessGif:
 
     def test_preserves_animation(self, sample_gif_path):
         """Should preserve frames in animated GIF."""
-        result_bytes, dimensions = process_gif(sample_gif_path)
+        result_bytes, dimensions = process_gif(sample_gif_path, output_format="webp")
 
         # Verify it's valid WebP
         assert result_bytes[:4] == b'RIFF'
 
     def test_converts_to_animated_webp(self, sample_gif_path):
         """Should output animated WebP format."""
-        result_bytes, dimensions = process_gif(sample_gif_path)
+        result_bytes, dimensions = process_gif(sample_gif_path, output_format="webp")
 
         # Should have WebP header
         assert b'WEBP' in result_bytes[:12]
@@ -162,18 +207,27 @@ class TestProcessGif:
 
     def test_handles_static_gif(self, static_gif_path):
         """Should handle non-animated GIF like regular image."""
-        result_bytes, dimensions = process_gif(static_gif_path)
+        result_bytes, dimensions = process_gif(static_gif_path, output_format="webp")
 
         assert result_bytes[:4] == b'RIFF'
         assert dimensions == (200, 150)
 
     def test_respects_quality(self, sample_gif_path):
         """Should apply quality setting."""
-        low_quality, _ = process_gif(sample_gif_path, quality=20)
-        high_quality, _ = process_gif(sample_gif_path, quality=95)
+        low_quality, _ = process_gif(sample_gif_path, quality=20, output_format="webp")
+        high_quality, _ = process_gif(sample_gif_path, quality=95, output_format="webp")
 
         # Higher quality generally larger
         assert len(high_quality) > len(low_quality) * 0.5  # Allow some variance
+
+    @pytest.mark.skipif(not JXL_AVAILABLE, reason="pillow-jxl-plugin not installed")
+    def test_converts_static_gif_to_jxl(self, static_gif_path):
+        """Should convert static GIF to JXL when requested."""
+        result_bytes, dimensions = process_gif(static_gif_path, output_format="jxl")
+
+        # Should produce JXL output
+        assert len(result_bytes) > 0
+        assert result_bytes[:2] == b'\xff\n' or result_bytes[:4] == b'\x00\x00\x00\x0c'
 
 
 class TestProcessVideo:

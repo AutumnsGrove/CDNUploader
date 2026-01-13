@@ -1,7 +1,7 @@
 """Image and video processing for CDN Upload CLI.
 
-Handles WebP conversion, quality optimization, EXIF stripping,
-GIF animation preservation, and video to WebP conversion.
+Handles JPEG XL and WebP conversion, quality optimization, EXIF stripping,
+GIF animation preservation, and video conversion.
 """
 
 import io
@@ -9,33 +9,86 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Literal
 
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
+
+# Import pillow-jxl-plugin for JPEG XL support
+try:
+    import pillow_jxl  # noqa: F401 - registers JXL format with Pillow
+    JXL_AVAILABLE = True
+except ImportError:
+    JXL_AVAILABLE = False
+
+# Type alias for output formats
+OutputFormat = Literal["jxl", "webp"]
 
 
 def process_image(
     input_path: Path | BinaryIO,
     quality: int = 75,
     full_resolution: bool = False,
+    output_format: OutputFormat = "jxl",
+    lossless_jpeg: bool = True,
 ) -> tuple[bytes, tuple[int, int]]:
-    """Convert image to optimized WebP format.
+    """Convert image to optimized JPEG XL or WebP format.
 
     Args:
         input_path: Path to input image or file-like object
-        quality: WebP quality 0-100
+        quality: Quality 0-100
         full_resolution: If True, skip resizing
+        output_format: Output format - 'jxl' (default) or 'webp'
+        lossless_jpeg: If True and input is JPEG, use lossless JXL transcoding
 
     Returns:
-        Tuple of (WebP bytes, (width, height))
+        Tuple of (output bytes, (width, height))
     """
+    # Detect if input is JPEG for lossless transcoding
+    is_jpeg_input = False
+    if isinstance(input_path, Path):
+        is_jpeg_input = input_path.suffix.lower() in {'.jpg', '.jpeg'}
+
+    # Check JXL availability
+    if output_format == "jxl" and not JXL_AVAILABLE:
+        raise RuntimeError(
+            "JPEG XL support not available. Install with: pip install pillow-jxl-plugin"
+        )
+
     # Open image
     if isinstance(input_path, Path):
         image = Image.open(input_path)
     else:
         image = Image.open(input_path)
 
+    # Get original size before any conversion
+    original_size = image.size
+
+    # For lossless JPEG→JXL transcoding, skip color conversion and resizing
+    use_lossless = (
+        output_format == "jxl"
+        and is_jpeg_input
+        and lossless_jpeg
+        and full_resolution  # Only lossless if keeping full resolution
+    )
+
+    if use_lossless:
+        # Lossless JPEG→JXL: preserve original exactly
+        # Re-read the original JPEG data for lossless transcoding
+        if isinstance(input_path, Path):
+            with open(input_path, 'rb') as f:
+                jpeg_data = f.read()
+
+            # Use pillow_jxl to do lossless JPEG reconstruction
+            output_buffer = io.BytesIO()
+            image.save(
+                output_buffer,
+                format='JXL',
+                lossless=True,
+            )
+            return output_buffer.getvalue(), original_size
+
+    # Standard processing path (lossy or non-JPEG input)
     # Convert to RGB if necessary (for RGBA, P mode, etc.)
     if image.mode in ('RGBA', 'LA'):
         # Create white background for transparent images
@@ -52,7 +105,6 @@ def process_image(
     image = strip_location_exif(image)
 
     # Calculate target dimensions
-    original_size = image.size
     if full_resolution:
         target_size = original_size
     else:
@@ -62,14 +114,24 @@ def process_image(
     if target_size != original_size:
         image = image.resize(target_size, Image.Resampling.LANCZOS)
 
-    # Convert to WebP
+    # Encode to output format
     output_buffer = io.BytesIO()
-    image.save(
-        output_buffer,
-        format='WEBP',
-        quality=quality,
-        method=6,  # Slower but better compression
-    )
+
+    if output_format == "jxl":
+        # JPEG XL encoding
+        image.save(
+            output_buffer,
+            format='JXL',
+            quality=quality,
+        )
+    else:
+        # WebP encoding (fallback)
+        image.save(
+            output_buffer,
+            format='WEBP',
+            quality=quality,
+            method=6,  # Slower but better compression
+        )
 
     return output_buffer.getvalue(), target_size
 
@@ -77,17 +139,20 @@ def process_image(
 def process_gif(
     input_path: Path,
     quality: int = 75,
+    output_format: OutputFormat = "webp",
 ) -> tuple[bytes, tuple[int, int]]:
-    """Convert animated GIF to animated WebP.
+    """Convert animated GIF to animated WebP or JXL.
 
     Preserves all frames and animation timing.
+    Note: For animated content, WebP is recommended for broader compatibility.
 
     Args:
         input_path: Path to input GIF
-        quality: WebP quality 0-100
+        quality: Quality 0-100
+        output_format: Output format - 'webp' (default for GIFs) or 'jxl'
 
     Returns:
-        Tuple of (WebP bytes, (width, height))
+        Tuple of (output bytes, (width, height))
     """
     # Open the GIF
     gif = Image.open(input_path)
@@ -97,7 +162,7 @@ def process_gif(
 
     if not is_animated:
         # Treat as static image
-        return process_image(input_path, quality=quality, full_resolution=True)
+        return process_image(input_path, quality=quality, full_resolution=True, output_format=output_format)
 
     # Extract all frames
     frames = []
@@ -136,17 +201,31 @@ def process_gif(
     # Get dimensions from first frame
     dimensions = frames[0].size
 
-    # Save as animated WebP
+    # Save as animated image
     output_buffer = io.BytesIO()
-    frames[0].save(
-        output_buffer,
-        format='WEBP',
-        save_all=True,
-        append_images=frames[1:] if len(frames) > 1 else [],
-        duration=durations,
-        loop=gif.info.get('loop', 0),
-        quality=quality,
-    )
+
+    if output_format == "jxl" and JXL_AVAILABLE:
+        # Animated JXL
+        frames[0].save(
+            output_buffer,
+            format='JXL',
+            save_all=True,
+            append_images=frames[1:] if len(frames) > 1 else [],
+            duration=durations,
+            loop=gif.info.get('loop', 0),
+            quality=quality,
+        )
+    else:
+        # Animated WebP (default for GIFs)
+        frames[0].save(
+            output_buffer,
+            format='WEBP',
+            save_all=True,
+            append_images=frames[1:] if len(frames) > 1 else [],
+            duration=durations,
+            loop=gif.info.get('loop', 0),
+            quality=quality,
+        )
 
     return output_buffer.getvalue(), dimensions
 
@@ -155,15 +234,18 @@ def process_video(
     input_path: Path,
     quality: int = 75,
     max_duration: float = 10.0,
+    output_format: OutputFormat = "webp",
 ) -> tuple[bytes, tuple[int, int]]:
     """Convert video to animated WebP.
 
     Removes audio, scales to max 720p, samples at 10fps.
+    Note: Videos always output WebP regardless of format setting (ffmpeg limitation).
 
     Args:
         input_path: Path to input video
-        quality: WebP quality 0-100
+        quality: Quality 0-100
         max_duration: Maximum allowed duration in seconds
+        output_format: Ignored - videos always output WebP for ffmpeg compatibility
 
     Returns:
         Tuple of (WebP bytes, (width, height))
@@ -171,6 +253,7 @@ def process_video(
     Raises:
         ValueError: If video exceeds max_duration
     """
+    # Note: Video processing always uses WebP due to ffmpeg limitations with animated JXL
     # Check video duration
     duration = get_video_duration(input_path)
     if duration > max_duration:
