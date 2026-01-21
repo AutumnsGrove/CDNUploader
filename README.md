@@ -1,25 +1,26 @@
-# CDN Upload CLI
+# Press
 
-A fast, intelligent CLI tool for uploading and managing images on your Cloudflare R2 CDN with automatic optimization, AI analysis, and batch processing.
+> Raw in. Ready out. Going to press.
+
+A fast, intelligent CLI for converting raw photos into web-ready images. Press handles the complete pipeline—JPEG XL conversion, AI-powered descriptions, duplicate detection, and upload to Cloudflare R2.
 
 ## Sample Output
 
-![Sample upload with AI analysis](https://cdn.autumnsgrove.com/photos/2025/11/20/person_with_curly_hair_holding_small_white_fluffy_6a9973a6.webp)
+![Sample upload with AI analysis](https://cdn.grove.place/autumn/2026/01/21/e2c7f6e5_photo_to_upload.jxl)
 
 *Uploaded with AI-generated filename based on image content*
 
 ## Features
 
-- **Smart Upload**: Automatic WebP conversion with quality optimization
-- **AI Analysis** (optional): Auto-generate descriptions, alt text, and tags using Claude
+- **JPEG XL Default**: Superior compression with lossless JPEG transcoding (WebP fallback available)
+- **AI Analysis** (optional): Auto-generate descriptions, alt text, and tags using Claude or local MLX
 - **Batch Processing**: Upload multiple images in parallel with progress tracking
 - **Link Management**: Auto-copy CDN links to clipboard in plain, Markdown, or HTML format
 - **Document Processing**: Extract images from Markdown/HTML files and replace with CDN links
 - **Video Support**: Convert videos to optimized silent WebP animations (max 10s, 720p)
 - **GIF Handling**: Preserve animations while converting to WebP
-- **Duplicate Detection**: Content-based hashing prevents re-uploads
-- **List Recent**: Browse uploaded images with descriptions and metadata
-- **Category Organization**: Organize by type and date (`photos/2025/11/20/...`)
+- **Duplicate Detection**: SHA-256 content hashing prevents re-uploads
+- **User Organization**: Organize by username and date (`autumn/2026/01/21/...`)
 
 ## Installation
 
@@ -34,7 +35,7 @@ cd CDNUploader
 uv tool install .
 
 # Now accessible from anywhere
-cdn-upload --help
+press --help
 ```
 
 ### Install for Development
@@ -52,7 +53,7 @@ uv pip install -e ".[dev]"
 If you have [Wrangler](https://developers.cloudflare.com/workers/wrangler/) installed and logged in:
 
 ```bash
-cdn-upload setup
+press setup
 ```
 
 This will detect your Cloudflare account, list your R2 buckets, and help create `secrets.json`.
@@ -75,6 +76,7 @@ This will detect your Cloudflare account, list your R2 buckets, and help create 
 | **secret_access_key** | Same as above → Copy **Secret Access Key** (shown only once!) |
 | **bucket_name** | [R2 Overview](https://dash.cloudflare.com/?to=/:account/r2/overview) → Your bucket's name |
 | **custom_domain** | [R2 Bucket](https://dash.cloudflare.com/?to=/:account/r2/overview) → Click bucket → **Settings** → **Public access** → Custom domain |
+| **username** | Your username for CDN path prefix (e.g., `autumn`) |
 
 **Tip**: If you have Wrangler installed, you can also find your account ID with:
 ```bash
@@ -83,7 +85,7 @@ wrangler whoami
 
 ### Optional: AI Analysis
 
-For AI-powered image descriptions, add your [Claude API key](https://console.claude.ai/settings/keys):
+For AI-powered image descriptions, add your [Claude API key](https://console.anthropic.com/settings/keys):
 ```json
 "ai": {
   "anthropic_api_key": "sk-ant-..."
@@ -94,55 +96,57 @@ For AI-powered image descriptions, add your [Claude API key](https://console.cla
 
 ```bash
 # Verify configuration
-cdn-upload auth
+press auth
 
 # Upload a single image
-cdn-upload upload image.jpg
+press upload image.jpg
 
 # Upload with AI analysis
-cdn-upload upload image.jpg --analyze
+press upload image.jpg --analyze
 
 # Batch upload
-cdn-upload upload *.jpg --analyze
+press upload *.jpg --analyze
 
 # Process markdown file (uploads images, rewrites links)
-cdn-upload upload document.md
+press upload document.md
 
 # List recent uploads
-cdn-upload list
+press list
 ```
 
 ## Usage Examples
 
 ```bash
-# Basic upload
-cdn-upload upload photo.jpg
+# Basic upload (JPEG XL default)
+press upload photo.jpg
+
+# Choose output format
+press upload photo.jpg --format jxl      # JPEG XL (default)
+press upload photo.jpg --format webp     # WebP fallback
+press upload photo.jpg --format both     # Upload both formats
 
 # Upload with custom quality (0-100)
-cdn-upload upload photo.jpg --quality 85
+press upload photo.jpg --quality 85
 
-# Full resolution (no compression)
-cdn-upload upload photo.jpg --full
+# Full resolution with lossless JPEG→JXL transcoding
+press upload photo.jpg --full
 
-# AI analysis with custom category
-cdn-upload upload diagram.png --analyze --category diagrams
+# AI analysis
+press upload diagram.png --analyze
 
 # Dry run to preview
-cdn-upload upload *.jpg --dry-run
+press upload *.jpg --dry-run
 
 # Output as Markdown image syntax
-cdn-upload upload photo.jpg --output-format markdown
+press upload photo.jpg --output-format markdown
 
 # List uploads with pagination
-cdn-upload list --page 2
-
-# Filter by category
-cdn-upload list --category screenshots
+press list --page 2
 ```
 
 ## How It Works
 
-1. **Image Processing**: Converts to WebP, strips EXIF GPS data, resizes based on quality
+1. **Image Processing**: Converts to JPEG XL (or WebP), strips EXIF GPS data, optimizes quality
 2. **Content Hashing**: SHA-256 hash of processed content for duplicate detection
 3. **AI Analysis**: Optional Claude vision API generates description for smart filenames
 4. **R2 Upload**: Uploads to Cloudflare R2 with 1-year cache headers
@@ -167,6 +171,7 @@ uv run mypy cdn_upload
 - `rich` - Terminal formatting and progress bars
 - `boto3` - S3/R2 uploads
 - `pillow` - Image processing
+- `pillow-jxl-plugin` - JPEG XL encoding
 - `anthropic` - Claude AI analysis
 - `beautifulsoup4` - HTML/Markdown parsing
 - `ffmpeg` - Video processing (external dependency)

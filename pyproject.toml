@@ -49,12 +49,13 @@ mlx = [
 ]
 
 [project.scripts]
-cdn-upload = "cdn_upload.cli:main"
+press = "cdn_upload.cli:main"
+cdn-upload = "cdn_upload.cli:main"  # legacy alias
 
 [project.urls]
-Homepage = "https://github.com/yourusername/cdn-upload-cli"
-Repository = "https://github.com/yourusername/cdn-upload-cli"
-Documentation = "https://github.com/yourusername/cdn-upload-cli#readme"
+Homepage = "https://github.com/AutumnsGrove/CDNUploader"
+Repository = "https://github.com/AutumnsGrove/CDNUploader"
+Documentation = "https://github.com/AutumnsGrove/CDNUploader#readme"
 
 [build-system]
 requires = ["hatchling"]
