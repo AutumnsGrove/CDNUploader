@@ -63,6 +63,8 @@ def upload_file(
         content_type = 'image/jpeg'
     elif key.endswith('.gif'):
         content_type = 'image/gif'
+    elif key.endswith('.jxl'):
+        content_type = 'image/jxl'
     else:
         content_type = 'application/octet-stream'
 
