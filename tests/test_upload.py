@@ -30,6 +30,7 @@ def r2_config():
         secret_access_key="test_secret",
         bucket_name="test_bucket",
         custom_domain="cdn.test.com",
+        username="testuser",
     )
 
 
