@@ -194,20 +194,20 @@ def check_duplicate(
     client: Any,
     bucket: str,
     custom_domain: str,
-    category: str,
+    username: str,
     date_path: str,
     content_hash: str,
 ) -> str | None:
     """Check if a file with the same hash already exists.
 
-    Searches for files in the same category/date path that contain
+    Searches for files in the same username/date path that contain
     the content hash in their filename.
 
     Args:
         client: Configured boto3 S3 client
         bucket: R2 bucket name
         custom_domain: Custom domain for CDN URLs
-        category: File category (photos, videos, etc.)
+        username: Username for path prefix
         date_path: Date path (YYYY/MM/DD)
         content_hash: First 8 chars of SHA-256 hash
 
@@ -215,7 +215,7 @@ def check_duplicate(
         Existing CDN URL if duplicate found, None otherwise
     """
     # Search prefix for the date path
-    prefix = f"{category}/{date_path}/"
+    prefix = f"{username}/{date_path}/"
 
     try:
         # List objects in the date path

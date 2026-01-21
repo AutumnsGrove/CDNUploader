@@ -71,12 +71,14 @@ class R2Config:
         secret_access_key: R2 secret access key
         bucket_name: R2 bucket name
         custom_domain: Custom domain for CDN URLs
+        username: Username for CDN path prefix (e.g., autumn -> autumn/2026/01/21/...)
     """
     account_id: str
     access_key_id: str
     secret_access_key: str
     bucket_name: str
     custom_domain: str
+    username: str
 
 
 @dataclass

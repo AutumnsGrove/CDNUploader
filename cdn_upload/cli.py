@@ -19,7 +19,7 @@ from rich.table import Table
 from .config import load_secrets, validate_config, get_r2_config, get_ai_config, ConfigError, get_config_dir
 from .models import ProcessingOptions, UploadResult
 from .process import process_image, process_gif, process_video, detect_file_type
-from .storage import calculate_hash, build_object_key, determine_category, get_date_path, generate_filename
+from .storage import calculate_hash, build_object_key, get_date_path, generate_filename
 from .upload import init_r2_client, upload_file, batch_upload, batch_delete, verify_connection, list_recent_uploads, check_duplicate
 from .ai import analyze_image, batch_analyze
 from .parser import extract_images, categorize_reference, rewrite_document, save_new_document, detect_document_type, resolve_local_path
@@ -333,8 +333,7 @@ def process_media_file(
             else:
                 metadata = analyze_image(upload_data, ai_config, content_hash, provider)
 
-        # Build object key
-        detected_category = determine_category(file_path, category)
+        # Build object key using username from config
         date_path = get_date_path()
         filename = generate_filename(
             file_path.stem,
@@ -342,7 +341,7 @@ def process_media_file(
             metadata.description if metadata else None,
             file_extension
         )
-        object_key = build_object_key(detected_category, date_path, filename)
+        object_key = build_object_key(r2_config.username, date_path, filename)
 
         if dry_run:
             console.print(f"[dim]Would upload: {file_path.name} → {object_key}[/dim]")
@@ -352,7 +351,7 @@ def process_media_file(
         # Check for duplicate
         existing_url = check_duplicate(
             client, r2_config.bucket_name, r2_config.custom_domain,
-            detected_category, date_path, content_hash
+            r2_config.username, date_path, content_hash
         )
         if existing_url:
             console.print(f"[yellow]Duplicate found:[/yellow] {file_path.name}")

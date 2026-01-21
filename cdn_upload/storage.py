@@ -126,18 +126,18 @@ def get_date_path(dt: datetime | None = None) -> str:
 
 
 def build_object_key(
-    category: str,
+    username: str,
     date_path: str,
     filename: str,
 ) -> str:
     """Build complete object key for R2 storage.
 
     Args:
-        category: File category (photos, videos, etc.)
+        username: Username for path prefix (e.g., autumn)
         date_path: Date path (YYYY/MM/DD)
         filename: Final filename
 
     Returns:
-        Complete object key (e.g., photos/2025/03/16/sunset_a3f9b2c1.webp)
+        Complete object key (e.g., autumn/2025/03/16/sunset_a3f9b2c1.webp)
     """
-    return f"{category}/{date_path}/{filename}"
+    return f"{username}/{date_path}/{filename}"

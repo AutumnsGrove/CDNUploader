@@ -92,6 +92,7 @@ def validate_config(secrets: dict[str, Any]) -> None:
         ("r2", "secret_access_key"),
         ("r2", "bucket_name"),
         ("r2", "custom_domain"),
+        ("r2", "username"),
     ]
 
     for section, field in required_fields:
@@ -117,6 +118,7 @@ def get_r2_config(secrets: dict[str, Any]) -> R2Config:
         secret_access_key=r2["secret_access_key"],
         bucket_name=r2["bucket_name"],
         custom_domain=r2["custom_domain"],
+        username=r2["username"],
     )
 
 
