@@ -22,8 +22,8 @@ from PIL import Image
 from .config import get_cache_dir
 from .models import ImageMetadata, AIConfig
 
-# OpenRouter model (primary)
-OPENROUTER_MODEL = "anthropic/claude-3.5-haiku"
+# OpenRouter model (primary) - Claude Haiku 4.5 with vision support
+OPENROUTER_MODEL = "anthropic/claude-haiku-4.5"
 
 # Cloudflare Workers AI model (fallback)
 CLOUDFLARE_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"

@@ -375,9 +375,10 @@ def process_media_file(
                 print_warning("Anthropic API key not configured, skipping analysis")
             elif provider == "mlx":
                 # MLX runs locally, no API key needed
-                metadata = analyze_image(upload_data, ai_config, content_hash, provider)
+                metadata = analyze_image(original_data, ai_config, content_hash, provider)
             else:
-                metadata = analyze_image(upload_data, ai_config, content_hash, provider)
+                # Use original_data for AI analysis (JXL not supported by vision APIs)
+                metadata = analyze_image(original_data, ai_config, content_hash, provider)
 
         # Build object key using username from config
         date_path = get_date_path()
