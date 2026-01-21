@@ -18,7 +18,7 @@ from rich.table import Table
 
 from .config import load_secrets, validate_config, get_r2_config, get_ai_config, ConfigError, get_config_dir
 from .models import ProcessingOptions, UploadResult
-from .process import process_image, process_gif, process_video, detect_file_type
+from .process import process_image, process_gif, process_video, detect_file_type, JXL_AVAILABLE, OutputFormat
 from .storage import calculate_hash, build_object_key, get_date_path, generate_filename
 from .upload import init_r2_client, upload_file, batch_upload, batch_delete, verify_connection, list_recent_uploads, check_duplicate
 from .ai import analyze_image, batch_analyze
@@ -120,7 +120,7 @@ def upload(
         85,
         "--quality",
         "-q",
-        help="WebP quality 0-100",
+        help="Compression quality 0-100",
         min=0,
         max=100,
     ),
@@ -128,13 +128,19 @@ def upload(
         False,
         "--full",
         "-f",
-        help="Keep full resolution (still converts to WebP)",
+        help="Keep full resolution (enables lossless JPEG→JXL for JPEG inputs)",
     ),
     skip_compression: bool = typer.Option(
         False,
         "--skip-compression",
         "-s",
-        help="Upload original file without WebP conversion",
+        help="Upload original file without conversion",
+    ),
+    format: str = typer.Option(
+        "jxl",
+        "--format",
+        "-F",
+        help="Output format: jxl (default), webp, or both",
     ),
     analyze: bool = typer.Option(
         False,
@@ -170,8 +176,21 @@ def upload(
     """Upload files to CDN.
 
     Supports images, videos, and documents (Markdown/HTML).
+    Output formats: JXL (default, best compression), WebP (wider compatibility), or both.
     """
     try:
+        # Validate image format option
+        image_format = format.lower()
+        if image_format not in ("jxl", "webp", "both"):
+            print_error(f"Invalid format '{format}'. Use: jxl, webp, or both")
+            raise typer.Exit(1)
+
+        # Check JXL availability if needed
+        if image_format in ("jxl", "both") and not JXL_AVAILABLE:
+            print_error("JPEG XL support not available. Install with: pip install pillow-jxl-plugin")
+            print_warning("Falling back to WebP format")
+            image_format = "webp"
+
         # Load configuration
         secrets = load_secrets()
         validate_config(secrets)
@@ -217,7 +236,7 @@ def upload(
                     urls = process_document(
                         file_path, client if not dry_run else None, r2_config, ai_config,
                         quality, full, analyze, category, output_format, dry_run, progress, provider,
-                        skip_compression
+                        skip_compression, image_format
                     )
                     all_urls.extend(urls)
 
@@ -226,7 +245,7 @@ def upload(
                     result = process_media_file(
                         file_path, client if not dry_run else None, r2_config, ai_config,
                         quality, full, analyze, category, file_type, dry_run, provider,
-                        skip_compression
+                        skip_compression, image_format
                     )
                     if result:
                         all_urls.append(result["url"])
@@ -290,8 +309,12 @@ def process_media_file(
     dry_run: bool,
     provider: str = "claude",
     skip_compression: bool = False,
+    image_format: str = "jxl",
 ) -> dict | None:
     """Process and upload a single media file.
+
+    Args:
+        image_format: Output format - 'jxl', 'webp', or 'both'
 
     Returns:
         Dict with 'key' and 'url', or None if failed
@@ -307,16 +330,35 @@ def process_media_file(
             upload_data = original_data
             file_extension = file_path.suffix.lower()
         else:
-            # Process based on type (convert to WebP)
-            if file_type == 'image':
-                upload_data, dimensions = process_image(file_path, quality, full)
+            # Determine output format for this file type
+            # Videos always use WebP (ffmpeg limitation)
+            # GIFs default to WebP for better animation support
+            if file_type == 'video':
+                output_fmt: OutputFormat = "webp"
             elif file_type == 'gif':
-                upload_data, dimensions = process_gif(file_path, quality)
+                output_fmt = "webp" if image_format == "webp" else "jxl"
+            else:
+                # For "both", use JXL as primary format
+                output_fmt = "jxl" if image_format in ("jxl", "both") else "webp"
+
+            # Process based on type
+            if file_type == 'image':
+                upload_data, dimensions = process_image(
+                    file_path, quality, full, output_format=output_fmt
+                )
+            elif file_type == 'gif':
+                upload_data, dimensions = process_gif(
+                    file_path, quality, output_format=output_fmt
+                )
             elif file_type == 'video':
-                upload_data, dimensions = process_video(file_path, quality)
+                upload_data, dimensions = process_video(
+                    file_path, quality, output_format=output_fmt
+                )
             else:
                 return None
-            file_extension = '.webp'
+
+            # Set file extension based on format used
+            file_extension = f'.{output_fmt}'
 
         # Calculate hash
         content_hash = calculate_hash(upload_data)
@@ -387,6 +429,7 @@ def process_document(
     progress,
     provider: str = "claude",
     skip_compression: bool = False,
+    image_format: str = "jxl",
 ) -> list[str]:
     """Process a document file and upload its images."""
     urls = []
@@ -426,7 +469,7 @@ def process_document(
                 img_path, client, r2_config, ai_config,
                 quality, full, analyze, category,
                 detect_file_type(img_path), dry_run, provider,
-                skip_compression
+                skip_compression, image_format
             )
 
             if url:

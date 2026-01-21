@@ -46,11 +46,12 @@ class ProcessingOptions:
     """Options for image processing and upload.
 
     Attributes:
-        quality: WebP quality 0-100 (default: 75)
-        full_resolution: Keep full resolution, no compression
+        quality: Compression quality 0-100 (default: 75)
+        full_resolution: Keep full resolution (enables lossless JPEG→JXL for JPEG inputs)
         analyze: Enable AI analysis for descriptions/tags
         category: Category for organization (default: photos)
         output_format: Output format: plain|markdown|html
+        image_format: Image format: jxl (default)|webp|both
         dry_run: Preview without uploading
     """
     quality: int = 75
@@ -58,6 +59,7 @@ class ProcessingOptions:
     analyze: bool = False
     category: str = "photos"
     output_format: str = "plain"
+    image_format: str = "jxl"
     dry_run: bool = False
 
 

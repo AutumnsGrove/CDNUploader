@@ -26,18 +26,18 @@ def generate_filename(
     original_name: str,
     content_hash: str,
     description: str | None = None,
-    extension: str = ".webp",
+    extension: str = ".jxl",
 ) -> str:
     """Generate final filename for CDN storage.
 
-    With AI description: photo_of_Sunset_Beach_a3f9b2c1.webp
-    Without: a3f9b2c1_original_filename.webp
+    With AI description: photo_of_Sunset_Beach_a3f9b2c1.jxl
+    Without: a3f9b2c1_original_filename.jxl
 
     Args:
         original_name: Original filename (without extension)
         content_hash: First 8 chars of content hash
         description: Optional AI-generated description
-        extension: File extension to use (default: .webp)
+        extension: File extension to use (default: .jxl)
 
     Returns:
         Generated filename with specified extension
@@ -138,6 +138,6 @@ def build_object_key(
         filename: Final filename
 
     Returns:
-        Complete object key (e.g., autumn/2025/03/16/sunset_a3f9b2c1.webp)
+        Complete object key (e.g., autumn/2025/03/16/sunset_a3f9b2c1.jxl)
     """
     return f"{username}/{date_path}/{filename}"
