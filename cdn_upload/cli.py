@@ -167,10 +167,10 @@ def upload(
         help="Preview without uploading",
     ),
     provider: str = typer.Option(
-        "cloudflare",
+        "openrouter",
         "--provider",
         "-p",
-        help="AI provider: cloudflare (default)|claude|mlx",
+        help="AI provider: openrouter (default)|cloudflare|claude|mlx",
     ),
 ) -> None:
     """Upload files to CDN.
@@ -307,7 +307,7 @@ def process_media_file(
     category: str,
     file_type: str,
     dry_run: bool,
-    provider: str = "cloudflare",
+    provider: str = "openrouter",
     skip_compression: bool = False,
     image_format: str = "jxl",
 ) -> dict | None:
@@ -367,7 +367,9 @@ def process_media_file(
         metadata = None
         if analyze:
             # Check if we have required credentials for the provider
-            if provider == "cloudflare" and not ai_config.cloudflare_ai_token:
+            if provider == "openrouter" and not ai_config.openrouter_api_key:
+                print_warning("OpenRouter API key not configured, skipping analysis")
+            elif provider == "cloudflare" and not ai_config.cloudflare_ai_token:
                 print_warning("Cloudflare AI token not configured, skipping analysis")
             elif provider == "claude" and not ai_config.anthropic_api_key:
                 print_warning("Anthropic API key not configured, skipping analysis")
@@ -429,7 +431,7 @@ def process_document(
     output_format: str,
     dry_run: bool,
     progress,
-    provider: str = "cloudflare",
+    provider: str = "openrouter",
     skip_compression: bool = False,
     image_format: str = "jxl",
 ) -> list[str]:
