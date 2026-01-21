@@ -132,7 +132,10 @@ def get_ai_config(secrets: dict[str, Any]) -> AIConfig:
         AIConfig dataclass with API keys
     """
     ai = secrets.get("ai", {})
+    r2 = secrets.get("r2", {})
     return AIConfig(
+        cloudflare_ai_token=ai.get("cloudflare_ai_token"),
+        cloudflare_account_id=r2.get("account_id"),  # Reuse from R2 config
         anthropic_api_key=ai.get("anthropic_api_key"),
         openrouter_api_key=ai.get("openrouter_api_key"),
     )

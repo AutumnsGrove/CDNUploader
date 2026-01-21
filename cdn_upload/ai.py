@@ -1,12 +1,14 @@
 """AI analysis integrations for CDN Upload CLI.
 
-Handles AI provider abstraction, Claude API, OpenRouter stub,
+Handles AI provider abstraction, Cloudflare Workers AI, Claude API,
 batch analysis, response parsing, and cache management.
 """
 
 import base64
 import io
 import json
+import urllib.request
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,9 @@ from PIL import Image
 
 from .config import get_cache_dir
 from .models import ImageMetadata, AIConfig
+
+# Cloudflare Workers AI model
+CLOUDFLARE_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct"
 
 # MLX model configuration
 # Default MLX model - can be overridden via environment or config
@@ -42,7 +47,7 @@ def analyze_image(
     image_data: bytes,
     config: AIConfig,
     content_hash: str | None = None,
-    provider: str = "claude",
+    provider: str = "cloudflare",
 ) -> ImageMetadata:
     """Get AI-generated metadata for a single image.
 
@@ -50,7 +55,7 @@ def analyze_image(
         image_data: Image bytes to analyze
         config: AI provider configuration
         content_hash: Optional hash for caching
-        provider: AI provider to use ('claude', 'openrouter', 'local')
+        provider: AI provider to use ('cloudflare', 'claude', 'mlx')
 
     Returns:
         ImageMetadata with description, alt_text, and tags
@@ -62,7 +67,11 @@ def analyze_image(
             return cached
 
     # Call appropriate provider
-    if provider == "claude":
+    if provider == "cloudflare":
+        if not config.cloudflare_ai_token or not config.cloudflare_account_id:
+            raise ValueError("Cloudflare AI token not configured")
+        result = _call_cloudflare(image_data, config.cloudflare_ai_token, config.cloudflare_account_id)
+    elif provider == "claude":
         if not config.anthropic_api_key:
             raise ValueError("Anthropic API key not configured")
         result = _call_claude(image_data, config.anthropic_api_key)
@@ -92,7 +101,7 @@ def analyze_image(
 def batch_analyze(
     images: list[tuple[str, bytes]],
     config: AIConfig,
-    provider: str = "claude",
+    provider: str = "cloudflare",
     max_workers: int = 3,
 ) -> dict[str, ImageMetadata]:
     """Analyze multiple images efficiently.
@@ -212,6 +221,98 @@ def _call_claude(
         }
 
 
+def _call_cloudflare(
+    image_data: bytes,
+    api_token: str,
+    account_id: str,
+) -> dict[str, Any]:
+    """Make Cloudflare Workers AI request for image analysis.
+
+    Args:
+        image_data: Image bytes to analyze
+        api_token: Cloudflare API token
+        account_id: Cloudflare account ID
+
+    Returns:
+        Parsed JSON response with description, alt_text, tags
+    """
+    # Encode image to base64 with data URL prefix
+    base64_image = base64.standard_b64encode(image_data).decode("utf-8")
+
+    # Detect image type from magic bytes
+    if image_data[:4] == b'\xff\xd8\xff\xe0' or image_data[:4] == b'\xff\xd8\xff\xe1':
+        media_type = "image/jpeg"
+    elif image_data[:8] == b'\x89PNG\r\n\x1a\n':
+        media_type = "image/png"
+    elif image_data[:4] == b'RIFF' and image_data[8:12] == b'WEBP':
+        media_type = "image/webp"
+    elif image_data[:12] == b'\x00\x00\x00\x0cJXL \r\n\x87\n':
+        media_type = "image/jxl"
+    else:
+        media_type = "image/jpeg"  # Default fallback
+
+    image_url = f"data:{media_type};base64,{base64_image}"
+
+    # Build request payload
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are an image analysis assistant. Always respond with valid JSON."},
+            {"role": "user", "content": ANALYSIS_PROMPT},
+        ],
+        "image": image_url,
+    }
+
+    # Make API request
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{CLOUDFLARE_MODEL}"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else ""
+        raise RuntimeError(f"Cloudflare AI request failed ({e.code}): {error_body}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Cloudflare AI connection failed: {e.reason}")
+
+    # Extract response text
+    if not result.get("success", False):
+        errors = result.get("errors", [])
+        raise RuntimeError(f"Cloudflare AI error: {errors}")
+
+    response_text = result.get("result", {}).get("response", "")
+
+    # Parse JSON from response
+    try:
+        if "{" in response_text:
+            start = response_text.index("{")
+            end = response_text.rindex("}") + 1
+            json_str = response_text[start:end]
+            return json.loads(json_str)
+        else:
+            return {
+                "description": response_text[:100],
+                "alt_text": response_text,
+                "tags": [],
+            }
+    except (json.JSONDecodeError, ValueError):
+        return {
+            "description": "Image analysis completed",
+            "alt_text": response_text[:200] if response_text else "No description available",
+            "tags": [],
+        }
+
+
 def _call_openrouter(
     image_data: bytes,
     api_key: str,
@@ -229,7 +330,7 @@ def _call_openrouter(
     """
     raise NotImplementedError(
         "OpenRouter integration not yet implemented. "
-        "Please use 'claude' as the provider."
+        "Please use 'cloudflare' or 'claude' as the provider."
     )
 
 

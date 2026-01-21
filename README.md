@@ -13,7 +13,7 @@ A fast, intelligent CLI for converting raw photos into web-ready images. Press h
 ## Features
 
 - **JPEG XL Default**: Superior compression with lossless JPEG transcoding (WebP fallback available)
-- **AI Analysis** (optional): Auto-generate descriptions, alt text, and tags using Claude or local MLX
+- **AI Analysis** (optional): Auto-generate descriptions, alt text, and tags using Cloudflare Workers AI (default), Claude, or local MLX
 - **Batch Processing**: Upload multiple images in parallel with progress tracking
 - **Link Management**: Auto-copy CDN links to clipboard in plain, Markdown, or HTML format
 - **Document Processing**: Extract images from Markdown/HTML files and replace with CDN links
@@ -85,12 +85,25 @@ wrangler whoami
 
 ### Optional: AI Analysis
 
-For AI-powered image descriptions, add your [Claude API key](https://console.anthropic.com/settings/keys):
+For AI-powered image descriptions, add your Cloudflare Workers AI token (recommended) or Claude API key as fallback.
+
+**Cloudflare Workers AI (default, near-zero cost):**
+1. Go to [Workers AI API Tokens](https://dash.cloudflare.com/?to=/:account/ai/workers-ai)
+2. Create a token with Workers AI permissions
+3. Add to secrets.json:
+```json
+"ai": {
+  "cloudflare_ai_token": "your_token_here"
+}
+```
+
+**Claude API (fallback):**
 ```json
 "ai": {
   "anthropic_api_key": "sk-ant-..."
 }
 ```
+Use with `--provider claude` flag.
 
 ## Quick Start
 
@@ -172,7 +185,8 @@ uv run mypy cdn_upload
 - `boto3` - S3/R2 uploads
 - `pillow` - Image processing
 - `pillow-jxl-plugin` - JPEG XL encoding
-- `anthropic` - Claude AI analysis
+- `cloudflare Workers AI` - AI image analysis (default, via REST API)
+- `anthropic` - Claude AI analysis (fallback)
 - `beautifulsoup4` - HTML/Markdown parsing
 - `ffmpeg` - Video processing (external dependency)
 

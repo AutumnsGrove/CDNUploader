@@ -88,8 +88,12 @@ class AIConfig:
     """AI provider configuration.
 
     Attributes:
-        anthropic_api_key: API key for Claude
+        cloudflare_ai_token: API token for Cloudflare Workers AI (primary)
+        cloudflare_account_id: Cloudflare account ID (shared with R2)
+        anthropic_api_key: API key for Claude (fallback)
         openrouter_api_key: API key for OpenRouter (optional)
     """
+    cloudflare_ai_token: Optional[str] = None
+    cloudflare_account_id: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
