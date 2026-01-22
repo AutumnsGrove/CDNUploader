@@ -52,11 +52,13 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Claude Code
+# Claude Code (ignore local config but track skills)
 .claude/
+!.claude/skills/
 
 # Logs
 *.log
 
 # Cache
 .cache/
+.baseproject-backup-*/
